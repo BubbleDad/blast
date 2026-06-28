@@ -1,0 +1,1936 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
+<title>Meowmoon Battle Prototype 12 Maintenance Clean</title>
+<style>
+  :root {
+    --bg: #050812;
+    --text: #f7fbff;
+  }
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    touch-action: none;
+    user-select: none;
+  }
+  body { display: grid; place-items: center; }
+  #wrap {
+    position: relative;
+    width: min(100vw, 58.1vh);
+    height: min(100vh, 172vw);
+    max-width: 520px;
+    max-height: 900px;
+    background: #050812;
+    overflow: hidden;
+    border-radius: 16px;
+    box-shadow: 0 22px 80px rgba(0,0,0,.65);
+  }
+  canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+    background: #050812;
+    touch-action: none;
+  }
+  @media (max-width: 640px) {
+    #wrap {
+      width: 100vw;
+      height: 100vh;
+      border-radius: 0;
+      max-width: none;
+      max-height: none;
+    }
+  }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game" aria-label="Meowmoon Battle prototype"></canvas>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  // Prototype 12 maintenance clean: built from v10 Level End Fix; preserves v12 wide-beam duration, Wave Cutter timing, additional swarm reduction, Orbit Blades radius, and level-end fix. No gameplay changes in maintenance.
+
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d", { alpha: false });
+
+  const W = 430;
+  const H = 760;
+  let dpr = 1;
+  let scaleX = 1, scaleY = 1;
+  let last = performance.now();
+
+  const state = {
+    mode: "title",
+    t: 0,
+    levelTime: 0,
+    duration: 90,
+    levelNumber: 1,
+    totalScore: 0,
+    score: 0,
+    announceTimer: 0,
+    signatureCooldown: 0,
+    orbitTimer: 0,
+    destroyed: 0,
+    scoreFlash: 0,
+    chain: 0,
+    chainTimer: 0,
+    maxChain: 0,
+    victorySoundPlayed: false,
+    phaseName: "",
+    spawnTimer: .15,
+    pulseTimer: .45,
+    finalBossSpawned: false,
+    shake: 0,
+    touchActive: false,
+    touchX: W/2,
+    touchY: H*0.73,
+    pointerId: null,
+    beams: [],
+    shockwaves: [],
+    bullets: [],
+    missiles: [],
+    lightning: [],
+    cutters: [],
+    enemies: [],
+    particles: [],
+    floaters: [],
+    trails: [],
+    weaponTimer: 0,
+    beamCooldown: 0,
+    missileCooldown: 0,
+    bombCooldown: 0,
+    finaleStarted: false
+  };
+
+  const player = {
+    x: W/2,
+    y: H*0.76,
+    r: 18,
+    glow: 0
+  };
+
+  const audio = {
+    ctx: null,
+    master: null,
+    unlocked: false,
+    enabled: true,
+    masterVolume: 0.78,
+    lastShot: 0,
+    shotSkip: 0,
+    lastShieldHit: 0,
+    lastHeavyHit: 0,
+    lastBossHit: 0
+  };
+
+  const rhythmPhases = [
+    { name: "warmup",      start: 0,  end: 15, spawnEvery: 3.1, pulseEvery: 7.0, group: "small",  countMin: 7,  countMax: 13, speed: .98, curve: 1.00 },
+    { name: "action",      start: 15, end: 38, spawnEvery: 1.9, pulseEvery: 5.2, group: "large",  countMin: 14, countMax: 24, speed: 1.08, curve: 1.12 },
+    { name: "swarm",       start: 38, end: 55, spawnEvery: .88, pulseEvery: 3.4, group: "swarm",  countMin: 20, countMax: 34, speed: 1.16, curve: 1.25 },
+    { name: "breath",      start: 55, end: 62, spawnEvery: 3.2, pulseEvery: 8.0, group: "small",  countMin: 6,  countMax: 10, speed: .92, curve: .96 },
+    { name: "action2",     start: 62, end: 78, spawnEvery: 1.55, pulseEvery: 4.5, group: "large",  countMin: 18, countMax: 30, speed: 1.15, curve: 1.22 },
+    { name: "finaleSwarm", start: 78, end: 90, spawnEvery: .70, pulseEvery: 2.6, group: "swarm",  countMin: 28, countMax: 46, speed: 1.24, curve: 1.34 }
+  ];
+
+  const levels = [
+    { title: "Beam Lines",    weaponName: "Wide Beam",        signature: "wideBeam",       hint: "A sweeping vertical beam cuts through rows and walls." },
+    { title: "Missile Moon",  weaponName: "Lock-On Missiles", signature: "lockMissiles",   hint: "Homing missiles seek heavy, shielded, and scattered enemies." },
+    { title: "Crystal Burst", weaponName: "Bomb Burst",       signature: "bombBurst",      hint: "A large shockwave clears close swarms around the avatar." },
+    { title: "Chain Storm",   weaponName: "Chain Lightning",  signature: "chainLightning", hint: "A lightning arc jumps through clustered enemies." },
+    { title: "Orbit Guard",   weaponName: "Orbit Blades",     signature: "orbitBlades",    hint: "Orbiting blades punish enemies that curve close." },
+    { title: "Wave Cutter",   weaponName: "Wave Cutter",      signature: "waveCutter",     hint: "A horizontal slash cuts across side streams and wave walls." }
+  ];
+
+  function resize() {
+    const rect = canvas.getBoundingClientRect();
+    dpr = Math.max(1, Math.min(2.5, window.devicePixelRatio || 1));
+    canvas.width = Math.round(rect.width * dpr);
+    canvas.height = Math.round(rect.height * dpr);
+    ctx.setTransform(canvas.width / W, 0, 0, canvas.height / H, 0, 0);
+    scaleX = W / rect.width;
+    scaleY = H / rect.height;
+  }
+
+  window.addEventListener("resize", resize, { passive: true });
+  resize();
+
+  function rand(a, b) { return a + Math.random() * (b - a); }
+  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function dist2(a, b, c, d) { const x=a-c, y=b-d; return x*x+y*y; }
+
+  function startLevel() {
+    unlockAudio();
+    sfxLaunch();
+    Object.assign(state, {
+      mode: "game",
+      t: 0,
+      levelTime: 0,
+      score: 0,
+      announceTimer: 4.0,
+      signatureCooldown: .6,
+      orbitTimer: 0,
+      destroyed: 0,
+      scoreFlash: 0,
+      chain: 0,
+      chainTimer: 0,
+      maxChain: 0,
+      victorySoundPlayed: false,
+      phaseName: "",
+      spawnTimer: .15,
+      pulseTimer: .45,
+      finalBossSpawned: false,
+      shake: 0,
+      touchActive: false,
+      pointerId: null,
+      beams: [],
+      shockwaves: [],
+      bullets: [],
+      missiles: [],
+      lightning: [],
+      cutters: [],
+      enemies: [],
+      particles: [],
+      floaters: [],
+      trails: [],
+      weaponTimer: 0,
+      beamCooldown: 0,
+      missileCooldown: 0,
+      bombCooldown: 0,
+      finaleStarted: false,
+      });
+    player.x = W/2;
+    player.y = H*0.76;
+    burst(W/2, H*0.75, 42, "#aef7ff", 2.1, 2.8);
+  }
+
+  function pointerPos(e) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: (e.clientX - rect.left) * scaleX,
+      y: (e.clientY - rect.top) * scaleY
+    };
+  }
+
+  canvas.addEventListener("pointerdown", e => {
+    e.preventDefault();
+    canvas.setPointerCapture(e.pointerId);
+    if (state.mode === "title") {
+      startCampaign();
+      return;
+    }
+    if (state.mode === "victory") {
+      startNextLevel();
+      return;
+    }
+    state.pointerId = e.pointerId;
+    state.touchActive = true;
+    const p = pointerPos(e);
+    state.touchX = clamp(p.x, 20, W-20);
+    state.touchY = clamp(p.y, H*.37, H*.93);
+  });
+
+  canvas.addEventListener("pointermove", e => {
+    if (state.mode !== "game") return;
+    if (state.pointerId !== null && e.pointerId !== state.pointerId) return;
+    e.preventDefault();
+    const p = pointerPos(e);
+    state.touchActive = true;
+    state.touchX = clamp(p.x, 20, W-20);
+    state.touchY = clamp(p.y, H*.37, H*.93);
+  });
+
+  canvas.addEventListener("pointerup", e => {
+    if (state.pointerId === e.pointerId) {
+      state.touchActive = false;
+      state.pointerId = null;
+    }
+  });
+  canvas.addEventListener("pointercancel", () => {
+    state.touchActive = false;
+    state.pointerId = null;
+  });
+
+  function unlockAudio() {
+    if (!audio.enabled || audio.unlocked) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) {
+      audio.enabled = false;
+      return;
+    }
+    try {
+      audio.ctx = audio.ctx || new AC();
+      if (audio.ctx.state === "suspended") audio.ctx.resume();
+      audio.master = audio.master || audio.ctx.createGain();
+      audio.master.gain.value = audio.masterVolume;
+      audio.master.connect(audio.ctx.destination);
+      audio.unlocked = true;
+    } catch (err) {
+      audio.enabled = false;
+    }
+  }
+
+  function nowAudio() {
+    return audio.ctx ? audio.ctx.currentTime : 0;
+  }
+
+  function tone(freq, start, dur, type = "sine", gain = .16, dest = null, endGain = 0.0001) {
+    if (!audio.unlocked || !audio.ctx) return null;
+    const ctxA = audio.ctx;
+    const o = ctxA.createOscillator();
+    const g = ctxA.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(freq, start);
+    g.gain.setValueAtTime(0.0001, start);
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0002, gain), start + Math.min(.025, dur*.25));
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0001, endGain), start + dur);
+    o.connect(g);
+    g.connect(dest || audio.master);
+    o.start(start);
+    o.stop(start + dur + .035);
+    return { o, g };
+  }
+
+  function sweep(freq1, freq2, start, dur, type = "sine", gain = .16, dest = null) {
+    const node = tone(freq1, start, dur, type, gain, dest);
+    if (node) node.o.frequency.exponentialRampToValueAtTime(Math.max(1, freq2), start + dur);
+    return node;
+  }
+
+  function noiseBurst(start, dur, gain = .16, filterFreq = 900, filterType = "lowpass") {
+    if (!audio.unlocked || !audio.ctx) return;
+    const ctxA = audio.ctx;
+    const bufferSize = Math.max(1, Math.floor(ctxA.sampleRate * dur));
+    const buffer = ctxA.createBuffer(1, bufferSize, ctxA.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i=0; i<bufferSize; i++) data[i] = Math.random() * 2 - 1;
+
+    const src = ctxA.createBufferSource();
+    src.buffer = buffer;
+    const filter = ctxA.createBiquadFilter();
+    filter.type = filterType;
+    filter.frequency.setValueAtTime(filterFreq, start);
+    const g = ctxA.createGain();
+    g.gain.setValueAtTime(Math.max(0.0001, gain), start);
+    g.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+    src.connect(filter);
+    filter.connect(g);
+    g.connect(audio.master);
+    src.start(start);
+    src.stop(start + dur + .02);
+  }
+
+  function sfxLaunch() {
+    if (!audio.unlocked) return;
+    const t = nowAudio();
+    sweep(180, 720, t, .34, "triangle", .16);
+    sweep(460, 980, t+.05, .22, "sine", .11);
+    noiseBurst(t+.02, .12, .07, 1600, "highpass");
+  }
+
+  function sfxRapidShot() {
+    if (!audio.unlocked) return;
+    const t = nowAudio();
+    if (t - audio.lastShot < .07) return;
+    audio.shotSkip = (audio.shotSkip + 1) % 4;
+    if (audio.shotSkip !== 0) return;
+    audio.lastShot = t;
+    sweep(760, 1120, t, .045, "square", .07);
+  }
+
+  function sfxBasicPop() {
+    if (!audio.unlocked) return;
+    const t = nowAudio();
+    sweep(rand(520, 680), rand(170, 240), t, .09, "sine", .12);
+    noiseBurst(t, .045, .06, 2100, "bandpass");
+  }
+
+  function sfxShardBreak() {
+    if (!audio.unlocked) return;
+    const t = nowAudio();
+    sweep(rand(920, 1200), rand(360, 480), t, .075, "triangle", .12);
+    noiseBurst(t, .055, .075, 3200, "highpass");
+  }
+
+  function sfxShieldHit() {
+    if (!audio.unlocked) return;
+    const t = nowAudio();
+    if (t - audio.lastShieldHit < .11) return;
+    audio.lastShieldHit = t;
+    sweep(1250, 860, t, .08, "sine", .105);
+    tone(1760, t+.012, .055, "sine", .07);
+  }
+
+  function sfxShieldBreak() {
+    if (!audio.unlocked) return;
+    const t = nowAudio();
+    sweep(1350, 420, t, .16, "triangle", .15);
+    noiseBurst(t, .12, .105, 3600, "highpass");
+  }
+
+  function sfxHeavyCrack() {
+    if (!audio.unlocked) return;
+    const t = nowAudio();
+    if (t - audio.lastHeavyHit < .13) return;
+    audio.lastHeavyHit = t;
+    tone(180, t, .07, "sawtooth", .105);
+    noiseBurst(t, .06, .08, 520, "lowpass");
+  }
+
+  function sfxHeavyBurst() {
+    if (!audio.unlocked) return;
+    const t = nowAudio();
+    sweep(220, 85, t, .18, "sawtooth", .17);
+    noiseBurst(t+.015, .14, .13, 720, "lowpass");
+    tone(520, t+.03, .08, "triangle", .07);
+  }
+
+  function sfxBossHit() {
+    if (!audio.unlocked) return;
+    const t = nowAudio();
+    if (t - audio.lastBossHit < .16) return;
+    audio.lastBossHit = t;
+    sweep(120, 70, t, .11, "sawtooth", .12);
+    noiseBurst(t, .05, .08, 420, "lowpass");
+  }
+
+  function sfxBossDestroy() {
+    if (!audio.unlocked) return;
+    const t = nowAudio();
+    sweep(170, 48, t, .42, "sawtooth", .19);
+    noiseBurst(t+.02, .28, .17, 680, "lowpass");
+    sweep(520, 1180, t+.15, .34, "triangle", .13);
+  }
+
+  function sfxBeam() {
+    if (!audio.unlocked) return;
+    const t = nowAudio();
+    sweep(280, 620, t, .16, "sawtooth", .12);
+    sweep(820, 520, t+.05, .28, "triangle", .105);
+  }
+
+  function sfxMissileLaunch(n = 1) {
+    if (!audio.unlocked) return;
+    const t = nowAudio();
+    sweep(220, 660, t, .16, "triangle", .095 + Math.min(n, 4)*.012);
+    noiseBurst(t, .08, .06, 1200, "bandpass");
+  }
+
+  function sfxMissileImpact() {
+    if (!audio.unlocked) return;
+    const t = nowAudio();
+    sweep(310, 110, t, .12, "sawtooth", .14);
+    noiseBurst(t+.006, .095, .105, 980, "lowpass");
+  }
+
+  function sfxBomb() {
+    if (!audio.unlocked) return;
+    const t = nowAudio();
+    sweep(160, 42, t, .38, "sawtooth", .20);
+    noiseBurst(t+.02, .26, .17, 520, "lowpass");
+    sweep(280, 900, t+.08, .30, "triangle", .11);
+  }
+
+  function sfxChain(level) {
+    if (!audio.unlocked) return;
+    const t = nowAudio();
+    const base = 420 + Math.min(level, 20) * 12;
+    tone(base, t, .08, "triangle", .105);
+    tone(base*1.5, t+.075, .11, "triangle", .12);
+  }
+
+  function sfxVictory() {
+    if (!audio.unlocked) return;
+    const t = nowAudio();
+    tone(392, t, .16, "triangle", .13);
+    tone(523.25, t+.13, .17, "triangle", .14);
+    tone(659.25, t+.27, .22, "triangle", .16);
+    sweep(780, 1260, t+.42, .25, "sine", .11);
+  }
+
+  function spawnEnemy(type, x, y, opts = {}) {
+    const base = {
+      type,
+      x, y,
+      vx: opts.vx || 0,
+      vy: opts.vy || 66,
+      r: 13,
+      hp: 1,
+      maxHp: 1,
+      shield: false,
+      phase: opts.phase ?? Math.random() * Math.PI * 2,
+      wobble: opts.wobble || rand(.8, 1.4),
+      score: 10,
+      hitFlash: 0,
+      hitSoundCooldown: 0,
+      age: 0,
+      hold: opts.hold ?? rand(.1, .55),
+      curve: opts.curve ?? 1,
+      laneBias: opts.laneBias ?? rand(-22, 22)
+    };
+    if (type === "basic") {
+      base.r = rand(11, 15);
+      base.vy = opts.vy || rand(58, 82);
+      base.hp = base.maxHp = 1;
+      base.score = 10;
+    } else if (type === "shard") {
+      base.r = rand(8, 11);
+      base.vy = opts.vy || rand(122, 168);
+      base.vx = opts.vx || rand(-18, 18);
+      base.hp = base.maxHp = 1;
+      base.score = 14;
+      base.hold = opts.hold ?? rand(.03, .25);
+    } else if (type === "heavy") {
+      base.r = rand(23, 28);
+      base.vy = opts.vy || rand(43, 58);
+      base.hp = base.maxHp = 8;
+      base.score = 60;
+      base.hold = opts.hold ?? rand(.25, .8);
+    } else if (type === "shield") {
+      base.r = rand(16, 19);
+      base.vy = opts.vy || rand(48, 64);
+      base.hp = base.maxHp = 3;
+      base.shield = true;
+      base.score = 35;
+      base.hold = opts.hold ?? rand(.35, .9);
+    } else if (type === "boss") {
+      base.r = 44;
+      base.vy = 20;
+      base.hp = base.maxHp = 55;
+      base.score = 500;
+      base.shield = true;
+      base.hold = 0;
+      base.curve = .5;
+    }
+    state.enemies.push(base);
+  }
+
+  function spawnWave(w) {
+    const y = -40;
+    const lane = clamp(player.x, 70, W-70);
+    const edgePad = 34;
+    const rowX = (i, count, width) => clamp(lane - width/2 + i * (width / Math.max(1, count-1)), edgePad, W-edgePad);
+
+    if (w.type === "driftRow") {
+      const width = 300;
+      for (let i=0; i<w.count; i++) {
+        spawnEnemy("basic", rowX(i, w.count, width), y - i*8, {
+          vy: 64 + i*2,
+          hold: .12,
+          laneBias: (i - (w.count-1)/2) * 11,
+          curve: 1.05
+        });
+      }
+    } else if (w.type === "arc") {
+      for (let i=0; i<w.count; i++) {
+        const u = (i / Math.max(1, w.count-1)) * Math.PI;
+        const x = lane + Math.cos(u) * 150;
+        const yy = y + Math.sin(u) * 46;
+        spawnEnemy("basic", clamp(x, 34, W-34), yy, { vy: 72, hold: .22, laneBias: Math.cos(u)*28 });
+      }
+    } else if (w.type === "vFormation") {
+      const mid = (w.count-1)/2;
+      for (let i=0; i<w.count; i++) {
+        const off = (i-mid) * 32;
+        const yy = y - Math.abs(i-mid) * 18;
+        spawnEnemy("basic", clamp(lane + off, 36, W-36), yy, {
+          vy: 74,
+          hold: .34,
+          laneBias: off*.28,
+          curve: 1.05
+        });
+      }
+      if (state.beamCooldown <= 0) triggerBeam("v");
+    } else if (w.type === "cluster") {
+      const cx = clamp(lane + rand(-45,45), 80, W-80);
+      for (let i=0; i<w.count; i++) {
+        spawnEnemy("basic", cx + rand(-70,70), y + rand(-60,30), {
+          vy: rand(60, 90),
+          hold: rand(.05, .35),
+          curve: 1.18
+        });
+      }
+      if (state.beamCooldown <= 0) triggerBeam("cluster");
+    } else if (w.type === "bubbleRing") {
+      const cx = lane;
+      const cy = -56;
+      const radius = 118;
+      for (let i=0; i<w.count; i++) {
+        const a = i / w.count * Math.PI * 2;
+        spawnEnemy("basic", clamp(cx + Math.cos(a)*radius, 32, W-32), cy + Math.sin(a)*48, {
+          vy: 66 + Math.sin(a)*8,
+          hold: .55,
+          laneBias: Math.cos(a)*42,
+          curve: 1.0,
+          phase: a
+        });
+      }
+      triggerBeam("ring");
+    } else if (w.type === "shieldWall") {
+      const width = 320;
+      for (let i=0; i<w.count; i++) {
+        const x = rowX(i, w.count, width);
+        spawnEnemy("shield", x, y - i*5, {
+          vy: 55,
+          hold: .55,
+          laneBias: (i-(w.count-1)/2)*16,
+          curve: 1.0
+        });
+      }
+      triggerBeam("shield");
+      triggerMissiles(3);
+    } else if (w.type === "spiralDrop") {
+      for (let i=0; i<w.count; i++) {
+        const a = i * .72;
+        const rad = 28 + i * 5.2;
+        const type = i % 7 === 0 ? "shield" : i % 5 === 0 ? "shard" : "basic";
+        spawnEnemy(type, clamp(lane + Math.cos(a)*rad, 32, W-32), y - i*11 + Math.sin(a)*18, {
+          vy: rand(65, 102),
+          hold: .32,
+          laneBias: Math.cos(a)*48,
+          curve: 1.08,
+          phase: a
+        });
+      }
+    } else if (w.type === "mixed") {
+      for (let i=0; i<w.count; i++) {
+        const roll = Math.random();
+        const type = roll < .58 ? "basic" : roll < .78 ? "shard" : roll < .93 ? "shield" : "heavy";
+        spawnEnemy(type, clamp(lane + rand(-170,170), 34, W-34), y + rand(-110, 20), {
+          vy: rand(62, 122),
+          hold: rand(.04, .42),
+          curve: 1.22,
+          laneBias: rand(-36,36)
+        });
+      }
+      if (state.bombCooldown <= 0 && state.enemies.length > 20) triggerBomb();
+    } else if (w.type === "heavyWall") {
+      const width = 286;
+      for (let i=0; i<w.count; i++) {
+        const x = rowX(i, w.count, width);
+        spawnEnemy("heavy", x, y - i*10, {
+          vy: 44,
+          hold: .7,
+          laneBias: (i-(w.count-1)/2)*18,
+          curve: .75
+        });
+      }
+      triggerMissiles(5);
+    } else if (w.type === "ringShield") {
+      const cx = lane;
+      const cy = -50;
+      const radius = 126;
+      for (let i=0; i<w.count; i++) {
+        const a = i / w.count * Math.PI * 2;
+        const type = i % 4 === 0 ? "shield" : "basic";
+        spawnEnemy(type, clamp(cx + Math.cos(a)*radius, 35, W-35), cy + Math.sin(a)*62, {
+          vy: 64 + Math.sin(a)*10,
+          hold: .75,
+          laneBias: Math.cos(a)*48,
+          curve: .95,
+          phase: a
+        });
+      }
+      triggerMissiles(4);
+      triggerBeam("ringShield");
+    } else if (w.type === "convergingWall") {
+      for (let i=0; i<w.count; i++) {
+        const leftSide = i % 2 === 0;
+        const col = Math.floor(i/2);
+        const x = leftSide ? 24 + (col%4)*22 : W - 24 - (col%4)*22;
+        const type = i % 8 === 0 ? "heavy" : i % 5 === 0 ? "shield" : "basic";
+        spawnEnemy(type, x, y - col*24, {
+          vy: rand(70,105),
+          vx: leftSide ? rand(28,58) : -rand(28,58),
+          hold: .15,
+          laneBias: leftSide ? -20 : 20,
+          curve: 1.35
+        });
+      }
+      triggerBomb();
+    }
+  }
+
+  function levelDef() {
+    return levels[(Math.max(1, state.levelNumber) - 1) % levels.length];
+  }
+
+  function signatureWeapon() {
+    return levelDef().signature;
+  }
+
+  function signatureWeaponName() {
+    return levelDef().weaponName;
+  }
+
+  function startCampaign() {
+    state.levelNumber = 1;
+    state.totalScore = 0;
+    startLevel();
+  }
+
+  function startNextLevel() {
+    state.levelNumber++;
+    startLevel();
+  }
+
+  function currentPhase() {
+    const t = clamp(state.levelTime, 0, state.duration);
+    for (const ph of rhythmPhases) {
+      if (t >= ph.start && t < ph.end) return ph;
+    }
+    return rhythmPhases[rhythmPhases.length - 1];
+  }
+
+  function phaseProgress(ph) {
+    return clamp((state.levelTime - ph.start) / Math.max(.001, ph.end - ph.start), 0, 1);
+  }
+
+  function phaseCount(ph, extra = 0) {
+    const p = phaseProgress(ph);
+    let n = Math.round(lerp(ph.countMin, ph.countMax, p) + extra);
+    if (ph.group === "swarm") n = Math.max(1, Math.round(n * .855));
+    return Math.max(1, n);
+  }
+
+  function weightedPick(list) {
+    return list[Math.floor(Math.random() * list.length)];
+  }
+
+  function spawnSmallRhythmGroup(ph, forcePulse = false) {
+    const count = phaseCount(ph, forcePulse ? 4 : 0);
+    const type = weightedPick(["driftRow", "arc", "cluster", "bubbleRing"]);
+    const oldLen = state.enemies.length;
+    spawnWave({ type, count });
+    tuneNewEnemies(oldLen, ph, forcePulse ? 1.08 : 1);
+  }
+
+  function spawnLargeRhythmGroup(ph, forcePulse = false) {
+    const count = phaseCount(ph, forcePulse ? 8 : 0);
+    const type = weightedPick(["vFormation", "shieldWall", "mixed", "heavyWall", "spiralDrop", "convergingWall", "ringShield"]);
+    const adjusted =
+      type === "heavyWall" ? Math.max(4, Math.round(count / 6)) :
+      type === "shieldWall" ? Math.max(5, Math.round(count / 4)) :
+      type === "ringShield" ? Math.max(14, Math.round(count * .75)) :
+      count;
+    const oldLen = state.enemies.length;
+    spawnWave({ type, count: adjusted });
+    tuneNewEnemies(oldLen, ph, forcePulse ? 1.12 : 1);
+    if (forcePulse && state.missileCooldown <= 0) triggerMissiles(type === "heavyWall" ? 6 : 4);
+  }
+
+  function spawnSwarmRhythmGroup(ph, forcePulse = false) {
+    const count = phaseCount(ph, forcePulse ? 14 : 0);
+    const lane = clamp(player.x, 60, W - 60);
+    const pattern = weightedPick(["curtain", "sideStreams", "spiral", "waveWall", "ringSwarm"]);
+    if (pattern === "curtain") {
+      const cols = 11;
+      const rows = Math.ceil(count / cols);
+      for (let i = 0; i < count; i++) {
+        const row = Math.floor(i / cols);
+        const col = i % cols;
+        const u = col / Math.max(1, cols - 1);
+        const wave = Math.sin(row * .75 + col * .55) * 16;
+        const type = i % 17 === 0 ? "shield" : i % 23 === 0 ? "heavy" : Math.random() < .34 ? "shard" : "basic";
+        spawnEnemy(type, clamp(24 + u * (W - 48) + wave, 22, W - 22), -35 - row * 23, {
+          vy: rand(86, 132) * ph.speed,
+          laneBias: (u - .5) * 86,
+          curve: ph.curve,
+          hold: .04 + (row % 3) * .04
+        });
+      }
+      triggerBeam("swarmCurtain");
+    } else if (pattern === "sideStreams") {
+      const streams = 4;
+      for (let i = 0; i < count; i++) {
+        const s = i % streams;
+        const left = s < 2;
+        const row = Math.floor(i / streams);
+        const x = left ? 18 + s * 24 : W - 18 - (s - 2) * 24;
+        const type = i % 19 === 0 ? "shield" : i % 29 === 0 ? "heavy" : Math.random() < .42 ? "shard" : "basic";
+        spawnEnemy(type, x, -34 - row * 18, {
+          vx: left ? rand(40, 84) : -rand(40, 84),
+          vy: rand(92, 138) * ph.speed,
+          laneBias: left ? -38 : 38,
+          curve: ph.curve * 1.10,
+          hold: .02
+        });
+      }
+      triggerMissiles(forcePulse ? 8 : 5);
+    } else if (pattern === "spiral") {
+      for (let i = 0; i < count; i++) {
+        const a = i * .56;
+        const ring = Math.floor(i / 18);
+        const rad = 34 + (i % 18) * 7.3;
+        const type = i % 21 === 0 ? "shield" : i % 31 === 0 ? "heavy" : Math.random() < .28 ? "shard" : "basic";
+        spawnEnemy(type, clamp(lane + Math.cos(a) * rad, 22, W - 22), -42 - ring * 56 + Math.sin(a) * 44, {
+          vy: rand(84, 130) * ph.speed,
+          laneBias: Math.cos(a) * 74,
+          curve: ph.curve * 1.05,
+          hold: .10 + ring * .05,
+          phase: a
+        });
+      }
+      if (forcePulse) triggerBomb();
+    } else if (pattern === "waveWall") {
+      const cols = 9;
+      for (let i = 0; i < count; i++) {
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        const x = clamp(32 + col * ((W - 64) / (cols - 1)), 22, W - 22);
+        const openish = (row + Math.floor(state.levelTime * 1.2)) % cols;
+        const type = col === openish ? "shard" : i % 16 === 0 ? "shield" : "basic";
+        spawnEnemy(type, x, -30 - row * 20, {
+          vy: rand(88, 130) * ph.speed,
+          laneBias: (col - (cols - 1) / 2) * 13,
+          curve: ph.curve * .98,
+          hold: .06
+        });
+      }
+      triggerBeam("swarmWall");
+    } else {
+      const layers = Math.max(2, Math.ceil(count / 14));
+      for (let i = 0; i < count; i++) {
+        const layer = Math.floor(i / 14);
+        const a = (i % 14) / 14 * Math.PI * 2 + layer * .37;
+        const rad = 70 + layer * 22;
+        const type = i % 18 === 0 ? "shield" : i % 27 === 0 ? "heavy" : Math.random() < .24 ? "shard" : "basic";
+        spawnEnemy(type, clamp(lane + Math.cos(a) * rad, 22, W - 22), -54 - layer * 34 + Math.sin(a) * 45, {
+          vy: rand(84, 125) * ph.speed,
+          laneBias: Math.cos(a) * 82,
+          curve: ph.curve * 1.02,
+          hold: .16 + layer * .03,
+          phase: a
+        });
+      }
+      triggerMissiles(forcePulse ? 9 : 6);
+    }
+  }
+
+  function tuneNewEnemies(startIndex, ph, mult = 1) {
+    for (let i = startIndex; i < state.enemies.length; i++) {
+      const e = state.enemies[i];
+      e.vy *= ph.speed;
+      e.curve *= ph.curve * mult;
+      e.hold = Math.max(0, e.hold * (ph.name === "swarm" || ph.name === "finaleSwarm" ? .72 : 1));
+    }
+  }
+
+  function enterRhythmPhase(ph) {
+    state.phaseName = ph.name;
+    state.spawnTimer = .08;
+    state.pulseTimer = .35;
+
+    if (ph.name === "warmup") {
+      spawnSmallRhythmGroup(ph, true);
+    } else if (ph.name === "action") {
+      spawnLargeRhythmGroup(ph, true);
+      triggerSignature("actionOpen", true);
+    } else if (ph.name === "swarm") {
+      spawnSwarmRhythmGroup(ph, true);
+      triggerSignature("swarmOpen", true);
+    } else if (ph.name === "breath") {
+      spawnSmallRhythmGroup(ph, false);
+    } else if (ph.name === "action2") {
+      spawnLargeRhythmGroup(ph, true);
+      triggerSignature("action2Open", true);
+    } else if (ph.name === "finaleSwarm") {
+      state.finaleStarted = true;
+      spawnSwarmRhythmGroup(ph, true);
+      triggerSignature("finale", true);
+    }
+  }
+
+  function spawnRhythmGroup(ph, forcePulse = false) {
+    if (ph.group === "swarm") spawnSwarmRhythmGroup(ph, forcePulse);
+    else if (ph.group === "large") spawnLargeRhythmGroup(ph, forcePulse);
+    else spawnSmallRhythmGroup(ph, forcePulse);
+  }
+
+  function updateWaveRhythm(dt) {
+    if (state.levelTime >= state.duration) {
+      state.spawnTimer = Math.max(state.spawnTimer, 999);
+      state.pulseTimer = Math.max(state.pulseTimer, 999);
+      return;
+    }
+
+    const ph = currentPhase();
+    if (state.phaseName !== ph.name) enterRhythmPhase(ph);
+
+    state.spawnTimer -= dt;
+    state.pulseTimer -= dt;
+
+    if (state.spawnTimer <= 0) {
+      spawnRhythmGroup(ph, false);
+      const density = ph.name === "finaleSwarm" ? 1.22 : ph.name === "swarm" ? 1.10 : 1;
+      state.spawnTimer = Math.max(.48, ph.spawnEvery / density);
+    }
+
+    if (state.pulseTimer <= 0) {
+      spawnRhythmGroup(ph, true);
+      state.pulseTimer = Math.max(1.2, ph.pulseEvery);
+    }
+
+    if (state.levelTime >= 84 && !state.finalBossSpawned) {
+      state.finalBossSpawned = true;
+      spawnEnemy("boss", clamp(player.x, 70, W - 70), -60, { vy: 18, curve: .65, hold: 0 });
+      triggerSignature("bossOpen", true);
+    }
+  }
+
+  function levelReadyToClear() {
+    if (state.levelTime < state.duration) return false;
+    const afterSpawningStopped = state.levelTime - state.duration;
+    const liveEnemyInTopBand = state.enemies.some(e =>
+      !e.dead && e.y > -e.r && e.y < H * .40
+    );
+    return !liveEnemyInTopBand || afterSpawningStopped >= 12;
+  }
+
+  function finishGame() {
+    if (state.mode === "victory") return;
+    if (state.enemies.length) {
+      triggerBomb(true);
+      for (const e of state.enemies) damageEnemy(e, 999);
+    }
+    state.mode = "victory";
+    if (!state.victorySoundPlayed) {
+      sfxVictory();
+      state.victorySoundPlayed = true;
+    }
+    state.shake = 12;
+    burst(W/2, H*.42, 120, "#aef7ff", 1.35, 1.25);
+    burst(W/2, H*.48, 90, "#ffef83", 1.1, 1);
+  }
+
+
+  function burst(x, y, n, color, speed = 1, size = 1) {
+    for (let i=0; i<n; i++) {
+      const a = rand(0, Math.PI*2);
+      const s = rand(38, 210) * speed;
+      const life = rand(.25, .85);
+      state.particles.push({
+        x, y,
+        vx: Math.cos(a)*s,
+        vy: Math.sin(a)*s,
+        life,
+        maxLife: life,
+        r: rand(1.4, 4.4)*size,
+        color
+      });
+    }
+  }
+
+  function addFloater(x, y, text, color = "#ffef83", size = 16) {
+    state.floaters.push({
+      x,
+      y,
+      vy: -42,
+      life: .86,
+      maxLife: .86,
+      text,
+      color,
+      size
+    });
+  }
+
+  function enemyColor(e) {
+    if (e.type === "basic") return "#48d7ff";
+    if (e.type === "shard") return "#ffdf4d";
+    if (e.type === "heavy") return "#b986ff";
+    if (e.type === "shield") return "#ff6cb1";
+    if (e.type === "boss") return "#ff4d7d";
+    return "#fff";
+  }
+
+  function damageEnemy(e, dmg, force = 0) {
+    if (e.shield && dmg < 2.5) dmg *= .45;
+    const willSurvive = e.hp - dmg > 0;
+    if (willSurvive && e.hitSoundCooldown <= 0) {
+      if (e.type === "shield") sfxShieldHit();
+      else if (e.type === "heavy") sfxHeavyCrack();
+      else if (e.type === "boss") sfxBossHit();
+      e.hitSoundCooldown = .16;
+    }
+    e.hp -= dmg;
+    e.hitFlash = .11;
+    if (force) e.y -= force;
+    if (e.hp <= 0) killEnemy(e);
+  }
+
+  function killEnemy(e) {
+    e.dead = true;
+    const c = enemyColor(e);
+    const heavy = e.type === "heavy" || e.type === "boss";
+    const shield = e.type === "shield";
+
+    // Positive-only scoring: destruction adds points; misses still do not subtract.
+    state.chain = state.chainTimer > 0 ? state.chain + 1 : 1;
+    state.chainTimer = 1.08;
+    state.maxChain = Math.max(state.maxChain, state.chain);
+    const chainBonus = Math.min(150, Math.max(0, state.chain - 1) * (e.type === "boss" ? 10 : 2));
+    const points = e.score + chainBonus;
+    state.score += points;
+    state.totalScore += points;
+    state.destroyed++;
+    state.scoreFlash = .28;
+
+    addFloater(e.x, e.y - e.r, "+" + points, chainBonus ? "#ffef83" : "#dffbff", heavy || e.type === "boss" ? 20 : 16);
+    if (state.chain >= 6 && (state.chain === 6 || state.chain % 5 === 0)) {
+      addFloater(clamp(e.x, 70, W-70), e.y + e.r + 14, "CHAIN x" + state.chain, "#ff6cb1", 18);
+      sfxChain(state.chain);
+    }
+
+    if (e.type === "boss") sfxBossDestroy();
+    else if (e.type === "heavy") sfxHeavyBurst();
+    else if (e.type === "shield") sfxShieldBreak();
+    else if (e.type === "shard") sfxShardBreak();
+    else sfxBasicPop();
+
+    state.shake = Math.max(state.shake, e.type === "boss" ? 10 : heavy ? 7 : shield ? 4 : 2.5);
+    burst(e.x, e.y,
+      e.type === "boss" ? 120 : heavy ? 48 : shield ? 30 : 18,
+      c,
+      e.type === "boss" ? 1.55 : heavy ? 1.25 : 1,
+      e.type === "boss" ? 1.7 : heavy ? 1.15 : 1
+    );
+    if (heavy || shield || e.type === "boss") {
+      state.shockwaves.push({
+        x: e.x,
+        y: e.y,
+        r: 10,
+        maxR: e.type === "boss" ? 190 : heavy ? 92 : 66,
+        life: .48,
+        maxLife: .48,
+        color: c
+      });
+    }
+  }
+
+  function triggerSignature(reason = "auto", forcePulse = false) {
+    const sig = signatureWeapon();
+    if (sig === "wideBeam") return triggerBeam(reason);
+    if (sig === "lockMissiles") return triggerMissiles(forcePulse ? 4 : 3);
+    if (sig === "bombBurst") return triggerBomb();
+    if (sig === "chainLightning") return triggerChainLightning(forcePulse ? 8 : 5);
+    if (sig === "orbitBlades") return triggerOrbitBlades(forcePulse ? 4.8 : 3.6);
+    if (sig === "waveCutter") return triggerWaveCutter(forcePulse ? 2 : 1);
+    return false;
+  }
+
+  function triggerChainLightning(strikes = 5) {
+    if (signatureWeapon() !== "chainLightning" || state.signatureCooldown > 0) return false;
+    state.signatureCooldown = 2.35;
+    sfxChain(Math.max(6, strikes));
+    const candidates = state.enemies
+      .filter(e => !e.dead && e.y > -30 && e.y < H*.78)
+      .sort((a,b) => dist2(player.x, player.y, a.x, a.y) - dist2(player.x, player.y, b.x, b.y))
+      .slice(0, strikes);
+    let fromX = player.x, fromY = player.y - 22;
+    for (const e of candidates) {
+      state.lightning.push({ x1: fromX, y1: fromY, x2: e.x, y2: e.y, life: .18, maxLife: .18 });
+      damageEnemy(e, e.type === "boss" ? 4 : e.type === "heavy" ? 5 : 99, 8);
+      burst(e.x, e.y, 8, "#ffef83", .65, .55);
+      fromX = e.x;
+      fromY = e.y;
+    }
+    state.shake = Math.max(state.shake, 5);
+    return true;
+  }
+
+  function triggerOrbitBlades(duration = 3.8) {
+    if (signatureWeapon() !== "orbitBlades" || state.signatureCooldown > 0) return false;
+    state.signatureCooldown = 4.8;
+    state.orbitTimer = Math.max(state.orbitTimer, duration);
+    sfxShieldBreak();
+    state.shockwaves.push({ x: player.x, y: player.y, r: 18, maxR: 92, life: .42, maxLife: .42, color: "#ffef83" });
+    return true;
+  }
+
+  function triggerWaveCutter(count = 1) {
+    if (signatureWeapon() !== "waveCutter" || state.signatureCooldown > 0) return false;
+    state.signatureCooldown = 2.2;
+    sfxBeam();
+
+    const active = state.enemies.filter(e => !e.dead && e.y > H*.16 && e.y < H*.72);
+    const startInEnemies = active.length > 0 && Math.random() < .5;
+    let baseY = player.y - 70;
+    if (startInEnemies) {
+      const pick = active[Math.floor(Math.random() * active.length)];
+      baseY = clamp(pick.y + rand(-22, 22), H*.22, H*.62);
+    }
+
+    for (let i=0; i<count; i++) {
+      state.cutters.push({ y: baseY - i*46, vy: -55, life: 2.16, maxLife: 2.16, width: W + 90, enemyBand: startInEnemies });
+    }
+    state.shake = Math.max(state.shake, 5);
+    return true;
+  }
+
+  function triggerBeam(reason, force = false) {
+    if (!force && signatureWeapon() !== "wideBeam") return false;
+    if (state.beamCooldown > 0) return false;
+    state.beamCooldown = reason === "finale" ? 1.8 : 4.7;
+    sfxBeam();
+    state.beams.push({
+      x: player.x,
+      y: player.y - 28,
+      width: reason === "finale" ? 128 : 82,
+      life: reason === "finale" ? 10.35 : 6.12,
+      maxLife: reason === "finale" ? 10.35 : 6.12,
+      sweep: reason === "finale" ? 86 : 40,
+      phase: rand(0, Math.PI*2)
+    });
+    state.shake = Math.max(state.shake, reason === "finale" ? 8 : 4);
+    return true;
+  }
+
+  function triggerMissiles(n = 2, force = false) {
+    if (!force && signatureWeapon() !== "lockMissiles") return false;
+    n = Math.max(1, Math.min(4, Math.round(n)));
+    if (state.missileCooldown > 0 && n < 4) return false;
+    state.missileCooldown = n >= 4 ? 1.2 : 2.55;
+    sfxMissileLaunch(n);
+    const colors = ["#ffef83", "#aef7ff", "#ff8fc7", "#ffffff"];
+    const center = (n - 1) / 2;
+    for (let i=0; i<n; i++) {
+      const lane = i - center;
+      state.missiles.push({
+        x: player.x + lane * 18 + rand(-3, 3),
+        y: player.y - 10 - i * 9,
+        vx: lane * 58 + rand(-12, 12),
+        vy: -170 - i * 8,
+        life: 2.65,
+        target: null,
+        trail: [],
+        color: colors[i % colors.length],
+        trailWidth: 3 + (i % 2),
+        r: 5 + (i % 3) * .8
+      });
+    }
+    return true;
+  }
+
+  function triggerBomb(force = false) {
+    if (!force && signatureWeapon() !== "bombBurst") return false;
+    if (state.bombCooldown > 0) return false;
+    state.bombCooldown = state.finaleStarted ? 4.6 : 7.6;
+    sfxBomb();
+    state.shockwaves.push({ x: player.x, y: player.y-18, r: 18, maxR: 245, life: .72, maxLife: .72, color: "#aef7ff", bomb: true });
+    state.shake = Math.max(state.shake, 10);
+    burst(player.x, player.y-18, 58, "#aef7ff", 1.25, 1.2);
+    for (const e of state.enemies) {
+      const d = Math.sqrt(dist2(player.x, player.y, e.x, e.y));
+      if (d < 250) damageEnemy(e, e.type === "boss" ? 8 : 99, 18);
+    }
+    return true;
+  }
+
+  function updatePlayer(dt) {
+    if (state.touchActive) {
+      // Direct steering only: no assist, no correction, no autopilot blend.
+      // The avatar goes exactly where the player sends it, bounded only by the screen.
+      player.x = clamp(state.touchX, 24, W-24);
+      player.y = clamp(state.touchY, H*.37, H*.93);
+    } else {
+      // Autopilot is off.
+      // When the player is not touching, the avatar stays at the last player-directed position.
+      player.x = clamp(player.x, 24, W-24);
+      player.y = clamp(player.y, H*.37, H*.93);
+    }
+
+    player.glow = Math.max(0, player.glow - dt);
+    state.trails.push({ x: player.x, y: player.y, life: .38, maxLife: .38, r: 14 });
+  }
+
+  function updateWeapons(dt) {
+    state.weaponTimer -= dt;
+    state.beamCooldown -= dt;
+    state.missileCooldown -= dt;
+    state.bombCooldown -= dt;
+    state.signatureCooldown = Math.max(0, state.signatureCooldown - dt);
+    state.orbitTimer = Math.max(0, state.orbitTimer - dt);
+
+    if (state.weaponTimer <= 0) {
+      const ph = currentPhase();
+      const triplePhase = ph.name === "action" || ph.name === "action2" || ph.name === "swarm" || ph.name === "finaleSwarm";
+      state.weaponTimer = triplePhase ? .078 : .105;
+      const spread = triplePhase ? 3 : 1;
+      sfxRapidShot();
+      for (let i=0; i<spread; i++) {
+        const center = (spread-1)/2;
+        const angle = spread === 1 ? 0 : (i-center) * .13;
+        state.bullets.push({
+          x: player.x + (i-center)*8,
+          y: player.y - 24,
+          vx: Math.sin(angle) * 68,
+          vy: -560,
+          r: triplePhase ? 4.0 : 3.6,
+          life: 1.1
+        });
+      }
+    }
+
+    const dense = state.enemies.filter(e => !e.dead && e.y > 35 && e.y < H*.58).length;
+    const heavyPresent = state.enemies.some(e => !e.dead && (e.type === "heavy" || e.type === "boss" || e.type === "shield") && e.y > -10 && e.y < H*.68);
+
+    const phForWeapons = currentPhase();
+    const swarmPressure = phForWeapons.name === "swarm" || phForWeapons.name === "finaleSwarm";
+    if ((dense >= (state.finaleStarted ? 8 : swarmPressure ? 10 : 13) || heavyPresent) && state.signatureCooldown <= 0) {
+      triggerSignature(swarmPressure ? "swarmAuto" : "auto", dense >= 18);
+    }
+
+    for (const b of state.bullets) {
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+      b.life -= dt;
+      for (const e of state.enemies) {
+        if (e.dead) continue;
+        if (dist2(b.x,b.y,e.x,e.y) < (b.r+e.r)*(b.r+e.r)) {
+          damageEnemy(e, state.finaleStarted ? 1.2 : 1, 5);
+          b.dead = true;
+          burst(b.x, b.y, 7, "#eaffff", .55, .65);
+          break;
+        }
+      }
+    }
+    state.bullets = state.bullets.filter(b => !b.dead && b.life > 0 && b.y > -30);
+
+    for (const beam of state.beams) {
+      beam.life -= dt;
+      beam.x = lerp(beam.x, player.x, .38);
+      beam.y = player.y - 28;
+      beam.phase += dt * 13;
+      const alpha = clamp(beam.life / beam.maxLife, 0, 1);
+      const beamX = beam.x + Math.sin(beam.phase) * beam.sweep * (1-alpha*.35);
+      for (const e of state.enemies) {
+        if (e.dead) continue;
+        if (e.y < beam.y && Math.abs(e.x - beamX) < beam.width*.52 + e.r) {
+          damageEnemy(e, (state.finaleStarted ? 4.4 : 3.6) * dt * 9, 26 * dt);
+          if (Math.random() < .20) burst(e.x, e.y, 4, "#bdf8ff", .45, .5);
+        }
+      }
+    }
+    state.beams = state.beams.filter(b => b.life > 0);
+
+    for (const l of state.lightning) l.life -= dt;
+    state.lightning = state.lightning.filter(l => l.life > 0);
+
+    for (const c of state.cutters) {
+      c.life -= dt;
+      c.y += c.vy * dt;
+      for (const e of state.enemies) {
+        if (e.dead) continue;
+        if (Math.abs(e.y - c.y) < e.r + 12) {
+          damageEnemy(e, e.type === "boss" ? 1.8 : e.type === "heavy" ? 3.5 : 99, 5);
+          if (Math.random() < .18) burst(e.x, e.y, 4, "#ffef83", .45, .5);
+        }
+      }
+    }
+    state.cutters = state.cutters.filter(c => c.life > 0 && c.y > -70);
+
+    if (state.orbitTimer > 0) {
+      const orbitR = 55.2;
+      const bladeR = 18;
+      for (let i=0; i<4; i++) {
+        const a = state.t * 5.2 + i * Math.PI/2;
+        const ox = player.x + Math.cos(a) * orbitR;
+        const oy = player.y + Math.sin(a) * orbitR;
+        for (const e of state.enemies) {
+          if (e.dead) continue;
+          if (dist2(ox, oy, e.x, e.y) < (e.r + bladeR) * (e.r + bladeR)) {
+            damageEnemy(e, e.type === "boss" ? 1.8 : e.type === "heavy" ? 3 : 99, 7);
+            burst(ox, oy, 5, "#ffef83", .55, .55);
+          }
+        }
+      }
+    }
+
+    for (const m of state.missiles) {
+      m.life -= dt;
+      if (!m.target || m.target.dead) m.target = nearestEnemy(m.x, m.y, true);
+      if (m.target) {
+        const dx = m.target.x - m.x;
+        const dy = m.target.y - m.y;
+        const len = Math.hypot(dx, dy) || 1;
+        m.vx += (dx/len) * 430 * dt;
+        m.vy += (dy/len) * 430 * dt;
+      }
+      const sp = Math.hypot(m.vx, m.vy) || 1;
+      const maxSp = state.finaleStarted ? 430 : 390;
+      if (sp > maxSp) {
+        m.vx = m.vx / sp * maxSp;
+        m.vy = m.vy / sp * maxSp;
+      }
+      m.x += m.vx * dt;
+      m.y += m.vy * dt;
+      m.trail.push({x:m.x, y:m.y});
+      if (m.trail.length > 14) m.trail.shift();
+
+      for (const e of state.enemies) {
+        if (e.dead) continue;
+        if (dist2(m.x,m.y,e.x,e.y) < (e.r+9)*(e.r+9)) {
+          damageEnemy(e, e.type === "boss" ? 8 : 16, 10);
+          sfxMissileImpact();
+          burst(m.x, m.y, 34, "#ffef83", 1.25, 1);
+          state.shockwaves.push({ x: m.x, y: m.y, r: 6, maxR: 52, life: .32, maxLife: .32, color: "#ffef83" });
+          m.dead = true;
+          state.shake = Math.max(state.shake, 5);
+          break;
+        }
+      }
+    }
+    state.missiles = state.missiles.filter(m => !m.dead && m.life > 0 && m.y > -80 && m.y < H+80 && m.x > -80 && m.x < W+80);
+  }
+
+  function nearestEnemy(x,y, preferStrong=false) {
+    let best = null, bestVal = Infinity;
+    for (const e of state.enemies) {
+      if (e.dead || e.y < -40 || e.y > H*.78) continue;
+      const d = dist2(x,y,e.x,e.y);
+      const bonus = preferStrong && (e.type === "heavy" || e.type === "shield" || e.type === "boss") ? .28 : 1;
+      const val = d * bonus;
+      if (val < bestVal) { bestVal = val; best = e; }
+    }
+    return best;
+  }
+
+  function updateEnemies(dt) {
+    const spawningStopped = state.levelTime >= state.duration;
+
+    for (const e of state.enemies) {
+      e.age += dt;
+      e.hitSoundCooldown = Math.max(0, e.hitSoundCooldown - dt);
+      e.phase += dt * e.wobble * 3;
+
+      if (spawningStopped && e.y < H * .40) {
+        e.hold = 0;
+        e.vy = Math.max(e.vy, e.type === "boss" ? 142 : 118);
+      }
+
+      // Prototype 10 keeps direct player steering. Compensation remains in
+      // smarter enemy motion: formations hold briefly, then curve strongly and
+      // visibly toward the avatar's current lane.
+      if (e.type !== "boss") {
+        const turnOn = clamp((e.age - e.hold) / .9, 0, 1);
+        const typeStrength =
+          e.type === "basic" ? 128 :
+          e.type === "shard" ? 168 :
+          e.type === "shield" ? 112 : 88;
+        const damping =
+          e.type === "shard" ? .13 :
+          e.type === "heavy" ? .24 :
+          e.type === "shield" ? .20 : .16;
+        const targetX = player.x + e.laneBias;
+        const dx = targetX - e.x;
+        const desired = clamp(dx * 0.052 * e.curve, -typeStrength, typeStrength);
+        e.vx += desired * turnOn * dt * 14;
+        e.vx *= Math.pow(damping, dt);
+      } else {
+        // Boss stages near the player lane during active spawning, then drifts
+        // out of the top band so the level can clear after spawning has stopped.
+        if (!spawningStopped && e.y > 126) {
+          e.vy = 0;
+          e.x = lerp(e.x, clamp(player.x, 70, W-70), .018);
+        }
+      }
+
+      e.x += (e.vx + Math.sin(e.phase)*8) * dt;
+      e.y += e.vy * dt;
+      e.x = clamp(e.x, -70, W+70);
+      e.hitFlash = Math.max(0, e.hitFlash - dt);
+      if (e.type === "boss" && e.y > 128 && !spawningStopped) e.vy = 0;
+
+      if (e.y > H + 70) {
+        // Passed enemies are neutral. No penalty, no failure, no score loss.
+        e.dead = true;
+      }
+
+      const danger = e.r + player.r + 6;
+      if (!e.dead && dist2(e.x,e.y,player.x,player.y) < danger*danger) {
+        // Contact remains non-punitive and is now treated as a shield impact.
+        damageEnemy(e, e.type === "boss" ? 2 : 99, 12);
+        player.glow = .28;
+        state.shake = Math.max(state.shake, 6);
+        state.shockwaves.push({ x: player.x, y: player.y, r: 10, maxR: 72, life: .30, maxLife: .30, color: "#aef7ff" });
+        burst(player.x, player.y, 18, "#aef7ff", .75, .75);
+      }
+    }
+    state.enemies = state.enemies.filter(e => !e.dead);
+  }
+
+
+  function updateParticles(dt) {
+    for (const p of state.particles) {
+      p.life -= dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vx *= Math.pow(.04, dt);
+      p.vy *= Math.pow(.04, dt);
+    }
+    state.particles = state.particles.filter(p => p.life > 0);
+
+    for (const f of state.floaters) {
+      f.life -= dt;
+      f.y += f.vy * dt;
+      f.vy *= Math.pow(.18, dt);
+    }
+    state.floaters = state.floaters.filter(f => f.life > 0);
+
+    for (const s of state.shockwaves) {
+      s.life -= dt;
+      s.r = lerp(s.r, s.maxR, 1 - Math.pow(.002, dt));
+    }
+    state.shockwaves = state.shockwaves.filter(s => s.life > 0);
+
+    for (const tr of state.trails) tr.life -= dt;
+    state.trails = state.trails.filter(tr => tr.life > 0);
+  }
+
+  function update(dt) {
+    state.t += dt;
+    if (state.mode === "game") {
+      state.levelTime += dt;
+      updateWaveRhythm(dt);
+      updatePlayer(dt);
+      updateWeapons(dt);
+      updateEnemies(dt);
+      updateParticles(dt);
+      state.announceTimer = Math.max(0, state.announceTimer - dt);
+      state.scoreFlash = Math.max(0, state.scoreFlash - dt);
+      state.chainTimer = Math.max(0, state.chainTimer - dt);
+      if (state.chainTimer <= 0) state.chain = 0;
+      state.shake = Math.max(0, state.shake - dt*18);
+      if (levelReadyToClear()) finishGame();
+    } else if (state.mode === "victory") {
+      updateParticles(dt);
+      state.shake = Math.max(0, state.shake - dt*16);
+    }
+  }
+
+  function drawBackground() {
+    const g = ctx.createLinearGradient(0,0,0,H);
+    g.addColorStop(0, "#060817");
+    g.addColorStop(.55, "#071026");
+    g.addColorStop(1, "#12091e");
+    ctx.fillStyle = g;
+    ctx.fillRect(0,0,W,H);
+
+    ctx.save();
+    const speed = state.mode === "game" ? state.levelTime * 44 : state.t * 13;
+    for (let layer=0; layer<3; layer++) {
+      const n = [42, 28, 18][layer];
+      const alpha = [.25, .38, .62][layer];
+      const size = [.8, 1.2, 1.8][layer];
+      const v = [0.35, .72, 1.15][layer];
+      ctx.fillStyle = `rgba(210,235,255,${alpha})`;
+      for (let i=0; i<n; i++) {
+        const x = (Math.sin(i*143.51 + layer*11) * 10000 % 1 + 1) % 1 * W;
+        const baseY = (Math.cos(i*91.17 + layer*7) * 10000 % 1 + 1) % 1 * H;
+        const y = (baseY + speed*v) % (H+40) - 20;
+        ctx.beginPath();
+        ctx.arc(x, y, size, 0, Math.PI*2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+
+    ctx.save();
+    ctx.globalAlpha = .12;
+    ctx.strokeStyle = "#9fd7ff";
+    ctx.lineWidth = 2;
+    for (let i=0; i<5; i++) {
+      ctx.beginPath();
+      ctx.arc(W*.5, H+80+i*14, 260+i*34, Math.PI*1.08, Math.PI*1.92);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawTitle() {
+    drawBackground();
+
+    const pulse = .5 + .5*Math.sin(state.t*2.2);
+    ctx.save();
+    ctx.translate(W/2, H*.42);
+    const rg = ctx.createRadialGradient(0,0,10,0,0,150);
+    rg.addColorStop(0, `rgba(92,230,255,${.32 + pulse*.12})`);
+    rg.addColorStop(1, "rgba(92,230,255,0)");
+    ctx.fillStyle = rg;
+    ctx.beginPath();
+    ctx.arc(0,0,160,0,Math.PI*2);
+    ctx.fill();
+
+    drawAvatarAt(0, 20, 1.75, true);
+    ctx.restore();
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#f7fbff";
+    ctx.font = "900 44px system-ui, sans-serif";
+    ctx.shadowColor = "rgba(110, 237, 255, .72)";
+    ctx.shadowBlur = 18;
+    ctx.fillText("Meowmoon", W/2, H*.21);
+    ctx.fillText("Battle", W/2, H*.285);
+    ctx.shadowBlur = 0;
+
+    ctx.font = "800 26px system-ui, sans-serif";
+    ctx.fillStyle = "#dff9ff";
+    ctx.fillText("Touch anywhere to start", W/2, H*.78);
+  }
+
+  function drawLevelAnnouncement() {
+    if (state.announceTimer <= 0) return;
+    const a = clamp(state.announceTimer / 4.0, 0, 1);
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, a * 1.35);
+    ctx.fillStyle = "rgba(5,8,18,.58)";
+    roundRect(28, 104, W-56, 168, 22, true, false);
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "900 28px system-ui, sans-serif";
+    ctx.shadowColor = "rgba(255,239,131,.75)";
+    ctx.shadowBlur = 14;
+    ctx.fillText("Level " + state.levelNumber, W/2, 142);
+    ctx.shadowBlur = 0;
+    ctx.font = "900 22px system-ui, sans-serif";
+    ctx.fillStyle = "#ffef83";
+    ctx.fillText(signatureWeaponName(), W/2, 182);
+    ctx.font = "700 16px system-ui, sans-serif";
+    ctx.fillStyle = "rgba(223,249,255,.92)";
+    ctx.fillText("Single Shot + Triple Shot", W/2, 216);
+    ctx.font = "700 13px system-ui, sans-serif";
+    ctx.fillStyle = "rgba(223,249,255,.76)";
+    ctx.fillText(levelDef().title, W/2, 242);
+    ctx.restore();
+  }
+
+  function drawGame() {
+    drawBackground();
+
+    const sx = state.shake ? rand(-state.shake, state.shake) : 0;
+    const sy = state.shake ? rand(-state.shake, state.shake) : 0;
+    ctx.save();
+    ctx.translate(sx, sy);
+
+    drawProgress();
+    drawHud();
+
+    for (const tr of state.trails) {
+      const a = clamp(tr.life / tr.maxLife, 0, 1);
+      ctx.fillStyle = `rgba(126, 231, 255, ${a*.12})`;
+      ctx.beginPath();
+      ctx.arc(tr.x, tr.y, tr.r*(1.4-a*.3), 0, Math.PI*2);
+      ctx.fill();
+    }
+
+    drawEnemies();
+    drawWeapons();
+    drawPlayer();
+    drawParticles();
+    drawLevelAnnouncement();
+
+    ctx.restore();
+  }
+
+  function drawProgress() {
+    const p = clamp(state.levelTime / state.duration, 0, 1);
+    ctx.save();
+    ctx.globalAlpha = .86;
+    ctx.fillStyle = "rgba(255,255,255,.09)";
+    roundRect(18, 18, W-36, 8, 4, true, false);
+    const g = ctx.createLinearGradient(18,0,W-18,0);
+    g.addColorStop(0, "#42ddff");
+    g.addColorStop(.55, "#ffef83");
+    g.addColorStop(1, "#ff5aa8");
+    ctx.fillStyle = g;
+    roundRect(18, 18, (W-36)*p, 8, 4, true, false);
+    ctx.restore();
+  }
+
+  function drawHud() {
+    ctx.save();
+    const pulse = 1 + state.scoreFlash * .65;
+    ctx.textAlign = "right";
+    ctx.font = `900 ${Math.round(18 * pulse)}px system-ui, sans-serif`;
+    ctx.fillStyle = "#ffffff";
+    ctx.shadowColor = "rgba(255,239,131,.75)";
+    ctx.shadowBlur = state.scoreFlash > 0 ? 12 : 0;
+    ctx.fillText(Math.round(state.totalScore).toString(), W - 20, 48);
+    ctx.shadowBlur = 0;
+
+    ctx.font = "700 12px system-ui, sans-serif";
+    ctx.fillStyle = "rgba(223,249,255,.78)";
+    ctx.fillText("TOTAL SCORE", W - 20, 64);
+
+    ctx.textAlign = "left";
+    ctx.font = "800 13px system-ui, sans-serif";
+    ctx.fillStyle = "rgba(223,249,255,.82)";
+    ctx.fillText("LEVEL " + state.levelNumber, 20, 48);
+    ctx.fillText("DESTROYED " + state.destroyed, 20, 64);
+
+    if (state.chainTimer > 0 && state.chain >= 3) {
+      ctx.font = "900 17px system-ui, sans-serif";
+      ctx.fillStyle = "#ffef83";
+      ctx.shadowColor = "rgba(255,108,177,.55)";
+      ctx.shadowBlur = 10;
+      ctx.fillText("CHAIN x" + state.chain, 20, 86);
+      ctx.shadowBlur = 0;
+    }
+    ctx.restore();
+  }
+
+  function drawEnemies() {
+    for (const e of state.enemies) {
+      ctx.save();
+      ctx.translate(e.x, e.y);
+      const c = enemyColor(e);
+      if (e.type === "shard") {
+        ctx.rotate(e.phase);
+        ctx.fillStyle = c;
+        ctx.strokeStyle = "rgba(255,255,255,.75)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(0, -e.r*1.6);
+        ctx.lineTo(e.r*1.15, e.r*.7);
+        ctx.lineTo(0, e.r*.35);
+        ctx.lineTo(-e.r*1.15, e.r*.7);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      } else {
+        const grad = ctx.createRadialGradient(-e.r*.35, -e.r*.45, e.r*.2, 0, 0, e.r*1.35);
+        grad.addColorStop(0, "#ffffff");
+        grad.addColorStop(.18, c);
+        grad.addColorStop(1, "rgba(0,0,0,.18)");
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(0,0,e.r,0,Math.PI*2);
+        ctx.fill();
+        ctx.lineWidth = e.type === "heavy" || e.type === "boss" ? 4 : 2.5;
+        ctx.strokeStyle = e.hitFlash > 0 ? "#ffffff" : "rgba(255,255,255,.55)";
+        ctx.stroke();
+
+        if (e.type === "heavy" || e.type === "boss") {
+          const crack = 1 - e.hp / e.maxHp;
+          ctx.strokeStyle = `rgba(20,10,35,${.35 + crack*.55})`;
+          ctx.lineWidth = 2;
+          for (let i=0; i<Math.ceil(crack*5); i++) {
+            ctx.beginPath();
+            ctx.moveTo(rand(-e.r*.35,e.r*.35), rand(-e.r*.45,e.r*.1));
+            ctx.lineTo(rand(-e.r*.9,e.r*.9), rand(-e.r*.2,e.r*.8));
+            ctx.stroke();
+          }
+        }
+
+        if (e.shield) {
+          ctx.strokeStyle = `rgba(160, 245, 255, ${.35 + .25*Math.sin(state.t*8 + e.phase)})`;
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.arc(0,0,e.r+7,0,Math.PI*2);
+          ctx.stroke();
+        }
+      }
+      if (e.maxHp > 1 && e.type !== "shield") {
+        const p = clamp(e.hp / e.maxHp, 0, 1);
+        ctx.fillStyle = "rgba(0,0,0,.34)";
+        roundRect(-e.r, e.r+8, e.r*2, 4, 2, true, false);
+        ctx.fillStyle = "#ffef83";
+        roundRect(-e.r, e.r+8, e.r*2*p, 4, 2, true, false);
+      }
+      ctx.restore();
+    }
+  }
+
+  function drawWeapons() {
+    ctx.save();
+    for (const b of state.bullets) {
+      ctx.strokeStyle = "rgba(210,250,255,.9)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(b.x, b.y+10);
+      ctx.lineTo(b.x - b.vx*.025, b.y+25);
+      ctx.stroke();
+      ctx.fillStyle = "#eaffff";
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r, 0, Math.PI*2);
+      ctx.fill();
+    }
+
+    for (const beam of state.beams) {
+      const alpha = clamp(beam.life / beam.maxLife, 0, 1);
+      const x = beam.x + Math.sin(beam.phase) * beam.sweep * (1-alpha*.35);
+      const grd = ctx.createLinearGradient(x, beam.y, x, -20);
+      grd.addColorStop(0, `rgba(180,250,255,${.95*alpha})`);
+      grd.addColorStop(.4, `rgba(73,214,255,${.55*alpha})`);
+      grd.addColorStop(1, `rgba(255,255,255,0)`);
+      ctx.fillStyle = grd;
+      ctx.globalCompositeOperation = "lighter";
+      roundRect(x - beam.width/2, -20, beam.width, beam.y+35, beam.width*.32, true, false);
+      ctx.fillStyle = `rgba(255,255,255,${.42*alpha})`;
+      roundRect(x - beam.width*.13, -20, beam.width*.26, beam.y+40, beam.width*.1, true, false);
+      ctx.globalCompositeOperation = "source-over";
+    }
+
+    for (const l of state.lightning) {
+      const a = clamp(l.life / l.maxLife, 0, 1);
+      ctx.globalAlpha = .35 + .55*a;
+      ctx.strokeStyle = "#ffef83";
+      ctx.lineWidth = 4*a + 1;
+      ctx.beginPath();
+      ctx.moveTo(l.x1, l.y1);
+      const mx = (l.x1 + l.x2)/2 + Math.sin(state.t*45 + l.x2)*10;
+      const my = (l.y1 + l.y2)/2 + Math.cos(state.t*38 + l.y2)*8;
+      ctx.quadraticCurveTo(mx, my, l.x2, l.y2);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+
+    for (const c of state.cutters) {
+      const a = clamp(c.life / c.maxLife, 0, 1);
+      ctx.globalAlpha = (c.enemyBand ? .42 : .30) + .48*a;
+      const grad = ctx.createLinearGradient(0, c.y, W, c.y);
+      grad.addColorStop(0, "rgba(255,239,131,0)");
+      grad.addColorStop(.5, "#ffef83");
+      grad.addColorStop(1, "rgba(255,239,131,0)");
+      ctx.fillStyle = grad;
+      ctx.fillRect(-20, c.y - 8, W + 40, 16);
+      ctx.globalAlpha = 1;
+    }
+
+    if (state.orbitTimer > 0) {
+      const aLife = clamp(state.orbitTimer / 4.8, 0, 1);
+      for (let i=0; i<4; i++) {
+        const a = state.t*5.2 + i*Math.PI/2;
+        const ox = player.x + Math.cos(a)*55.2;
+        const oy = player.y + Math.sin(a)*55.2;
+        ctx.save();
+        ctx.translate(ox, oy);
+        ctx.rotate(a + Math.PI/2);
+        ctx.globalAlpha = .45 + .45*aLife;
+        ctx.fillStyle = "#ffef83";
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 1.5;
+        roundRect(-24, -5, 48, 10, 5, true, true);
+        ctx.fillStyle = "rgba(255,255,255,.65)";
+        roundRect(-14, -2, 28, 4, 2, true, false);
+        ctx.restore();
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    for (const m of state.missiles) {
+      ctx.strokeStyle = hexToRgba(m.color || "#ffef83", .44);
+      ctx.lineWidth = m.trailWidth || 4;
+      ctx.beginPath();
+      for (let i=0; i<m.trail.length; i++) {
+        const p = m.trail[i];
+        if (i===0) ctx.moveTo(p.x,p.y); else ctx.lineTo(p.x,p.y);
+      }
+      ctx.stroke();
+      ctx.fillStyle = m.color || "#ffef83";
+      ctx.beginPath();
+      ctx.arc(m.x, m.y, m.r || 5.5, 0, Math.PI*2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(5,8,18,.45)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = "rgba(255,255,255,.92)";
+      ctx.beginPath();
+      ctx.arc(m.x-1.5, m.y-1.5, 2.0, 0, Math.PI*2);
+      ctx.fill();
+    }
+
+    for (const s of state.shockwaves) {
+      const a = clamp(s.life / s.maxLife, 0, 1);
+      ctx.strokeStyle = hexToRgba(s.color, .75*a);
+      ctx.lineWidth = s.bomb ? 7 : 4;
+      ctx.beginPath();
+      ctx.arc(s.x,s.y,s.r,0,Math.PI*2);
+      ctx.stroke();
+      ctx.strokeStyle = `rgba(255,255,255,${.28*a})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(s.x,s.y,s.r*.72,0,Math.PI*2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawPlayer() { drawAvatarAt(player.x, player.y, 1, false); }
+
+  function drawAvatarAt(x, y, scale=1, title=false) {
+    ctx.save();
+    ctx.translate(x,y);
+    ctx.scale(scale,scale);
+    const pulse = .5 + .5*Math.sin(state.t*7);
+    const rg = ctx.createRadialGradient(0,0,4,0,0,42);
+    rg.addColorStop(0, `rgba(255,255,255,.95)`);
+    rg.addColorStop(.28, `rgba(121,235,255,.9)`);
+    rg.addColorStop(1, `rgba(121,235,255,0)`);
+    ctx.fillStyle = rg;
+    ctx.beginPath();
+    ctx.arc(0,0,42,0,Math.PI*2);
+    ctx.fill();
+
+    ctx.rotate(Math.sin(state.t*1.7)*.04);
+    ctx.fillStyle = "#dffbff";
+    ctx.strokeStyle = "#4bdaff";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(0, -25);
+    ctx.bezierCurveTo(24, -8, 22, 20, 0, 27);
+    ctx.bezierCurveTo(-22, 20, -24, -8, 0, -25);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    const cg = ctx.createRadialGradient(-5,-6,2,0,0,17);
+    cg.addColorStop(0, "#ffffff");
+    cg.addColorStop(.36, "#aef7ff");
+    cg.addColorStop(1, "#3761ff");
+    ctx.fillStyle = cg;
+    ctx.beginPath();
+    ctx.arc(0,0,15,0,Math.PI*2);
+    ctx.fill();
+
+    ctx.fillStyle = "#ffef83";
+    ctx.strokeStyle = "rgba(255,255,255,.7)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(-16, 8);
+    ctx.lineTo(-36, 18);
+    ctx.lineTo(-18, -3);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(16, 8);
+    ctx.lineTo(36, 18);
+    ctx.lineTo(18, -3);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    if (!title && (player.glow > 0 || state.touchActive)) {
+      ctx.strokeStyle = `rgba(255,255,255,${state.touchActive ? .38 : .7})`;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(0,0,33 + pulse*3,0,Math.PI*2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawParticles() {
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    for (const p of state.particles) {
+      const a = clamp(p.life / p.maxLife, 0, 1);
+      ctx.fillStyle = hexToRgba(p.color, a*.85);
+      ctx.beginPath();
+      ctx.arc(p.x,p.y,p.r*(.4+a),0,Math.PI*2);
+      ctx.fill();
+    }
+    ctx.globalCompositeOperation = "source-over";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    for (const f of state.floaters) {
+      const a = clamp(f.life / f.maxLife, 0, 1);
+      ctx.font = `900 ${f.size}px system-ui, sans-serif`;
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = `rgba(4,8,18,${.75*a})`;
+      ctx.fillStyle = hexToRgba(f.color, .95*a);
+      ctx.strokeText(f.text, f.x, f.y);
+      ctx.fillText(f.text, f.x, f.y);
+    }
+    ctx.restore();
+  }
+
+  function drawVictory() {
+    drawBackground();
+    drawParticles();
+
+    ctx.save();
+    ctx.textAlign = "center";
+    const pulse = .5 + .5*Math.sin(state.t*3);
+    const rg = ctx.createRadialGradient(W/2,H*.42,10,W/2,H*.42,190);
+    rg.addColorStop(0, `rgba(255,239,131,${.35 + pulse*.1})`);
+    rg.addColorStop(1, "rgba(255,239,131,0)");
+    ctx.fillStyle = rg;
+    ctx.beginPath();
+    ctx.arc(W/2,H*.42,200,0,Math.PI*2);
+    ctx.fill();
+
+    ctx.font = "900 48px system-ui, sans-serif";
+    ctx.fillStyle = "#ffffff";
+    ctx.shadowColor = "rgba(255,239,131,.8)";
+    ctx.shadowBlur = 20;
+    ctx.fillText("Level Clear", W/2, H*.31);
+    ctx.shadowBlur = 0;
+
+    ctx.font = "800 22px system-ui, sans-serif";
+    ctx.fillStyle = "#dff9ff";
+    ctx.fillText("Level " + state.levelNumber + " · " + signatureWeaponName(), W/2, H*.40);
+
+    ctx.font = "700 18px system-ui, sans-serif";
+    ctx.fillStyle = "rgba(247,251,255,.88)";
+    ctx.fillText(`Destroyed: ${state.destroyed}`, W/2, H*.49);
+    ctx.fillText(`Level Score: ${Math.round(state.score)}`, W/2, H*.54);
+    ctx.fillText(`Total Score: ${Math.round(state.totalScore)}`, W/2, H*.59);
+    ctx.fillText(`Best Chain: x${Math.max(1, state.maxChain)}`, W/2, H*.64);
+
+    ctx.font = "800 24px system-ui, sans-serif";
+    ctx.fillStyle = "#ffef83";
+    ctx.fillText("Touch screen for next level", W/2, H*.77);
+    ctx.restore();
+  }
+
+  function render() {
+    if (state.mode === "title") drawTitle();
+    else if (state.mode === "game") drawGame();
+    else drawVictory();
+  }
+
+  function roundRect(x, y, w, h, r, fill, stroke) {
+    if (w < 0) return;
+    r = Math.min(r, Math.abs(w)/2, Math.abs(h)/2);
+    ctx.beginPath();
+    ctx.moveTo(x+r, y);
+    ctx.arcTo(x+w, y, x+w, y+h, r);
+    ctx.arcTo(x+w, y+h, x, y+h, r);
+    ctx.arcTo(x, y+h, x, y, r);
+    ctx.arcTo(x, y, x+w, y, r);
+    ctx.closePath();
+    if (fill) ctx.fill();
+    if (stroke) ctx.stroke();
+  }
+
+  function hexToRgba(hex, a) {
+    const h = hex.replace("#","");
+    const r = parseInt(h.slice(0,2),16);
+    const g = parseInt(h.slice(2,4),16);
+    const b = parseInt(h.slice(4,6),16);
+    return `rgba(${r},${g},${b},${a})`;
+  }
+
+  function loop(now) {
+    const dt = Math.min(.033, (now - last) / 1000 || .016);
+    last = now;
+    update(dt);
+    render();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
