@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
-<title>Meowmoon Battle Prototype 12 Maintenance Clean</title>
+<title>Meowmoon Battle Prototype 14 Level Identity</title>
 <style>
   :root {
     --bg: #050812;
@@ -11,7 +11,9 @@
   }
   html, body {
     margin: 0;
+    width: 100%;
     height: 100%;
+    min-height: 100dvh;
     overflow: hidden;
     background: var(--bg);
     color: var(--text);
@@ -19,17 +21,33 @@
     touch-action: none;
     user-select: none;
   }
-  body { display: grid; place-items: center; }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding:
+      env(safe-area-inset-top)
+      env(safe-area-inset-right)
+      env(safe-area-inset-bottom)
+      env(safe-area-inset-left);
+    box-sizing: border-box;
+  }
   #wrap {
     position: relative;
-    width: min(100vw, 58.1vh);
-    height: min(100vh, 172vw);
-    max-width: 520px;
-    max-height: 900px;
+    width: min(100vw, calc(100dvh * 0.5657894737));
+    height: min(100dvh, calc(100vw * 1.7674418605));
+    max-width: none;
+    max-height: none;
     background: #050812;
     overflow: hidden;
-    border-radius: 16px;
+    border-radius: clamp(0px, 1.6vw, 16px);
     box-shadow: 0 22px 80px rgba(0,0,0,.65);
+  }
+  @supports (height: 100svh) {
+    #wrap {
+      width: min(100vw, calc(100svh * 0.5657894737));
+      height: min(100svh, calc(100vw * 1.7674418605));
+    }
   }
   canvas {
     width: 100%;
@@ -39,9 +57,10 @@
     touch-action: none;
   }
   @media (max-width: 640px) {
+    body { padding: 0; }
     #wrap {
       width: 100vw;
-      height: 100vh;
+      height: 100dvh;
       border-radius: 0;
       max-width: none;
       max-height: none;
@@ -58,7 +77,7 @@
 (() => {
   "use strict";
 
-  // Prototype 12 maintenance clean: built from v10 Level End Fix; preserves v12 wide-beam duration, Wave Cutter timing, additional swarm reduction, Orbit Blades radius, and level-end fix. No gameplay changes in maintenance.
+  // Prototype 14 level identity: built from v13 maintenance clean; adds Shield Breaker, Gravity Well, Clear Lane, Slow Field, Side Beam Sweep, levels 7 and 8, next-level preview, and level-specific enemy mix.
 
   const canvas = document.getElementById("game");
   const ctx = canvas.getContext("2d", { alpha: false });
@@ -101,6 +120,12 @@
     missiles: [],
     lightning: [],
     cutters: [],
+    breakers: [],
+    wells: [],
+    clearLanes: [],
+    slowFields: [],
+    sideSweeps: [],
+    friendlyTimer: 0,
     enemies: [],
     particles: [],
     floaters: [],
@@ -142,12 +167,14 @@
   ];
 
   const levels = [
-    { title: "Beam Lines",    weaponName: "Wide Beam",        signature: "wideBeam",       hint: "A sweeping vertical beam cuts through rows and walls." },
-    { title: "Missile Moon",  weaponName: "Lock-On Missiles", signature: "lockMissiles",   hint: "Homing missiles seek heavy, shielded, and scattered enemies." },
-    { title: "Crystal Burst", weaponName: "Bomb Burst",       signature: "bombBurst",      hint: "A large shockwave clears close swarms around the avatar." },
-    { title: "Chain Storm",   weaponName: "Chain Lightning",  signature: "chainLightning", hint: "A lightning arc jumps through clustered enemies." },
-    { title: "Orbit Guard",   weaponName: "Orbit Blades",     signature: "orbitBlades",    hint: "Orbiting blades punish enemies that curve close." },
-    { title: "Wave Cutter",   weaponName: "Wave Cutter",      signature: "waveCutter",     hint: "A horizontal slash cuts across side streams and wave walls." }
+    { title: "Beam Lines",    weaponName: "Wide Beam",        signature: "wideBeam",       friendly: [],                         hint: "A sweeping vertical beam cuts through rows and walls." },
+    { title: "Missile Moon",  weaponName: "Lock-On Missiles", signature: "lockMissiles",   friendly: [],                         hint: "Homing missiles seek heavy, shielded, and scattered enemies." },
+    { title: "Crystal Burst", weaponName: "Bomb Burst",       signature: "bombBurst",      friendly: [],                         hint: "A large shockwave clears close swarms around the avatar." },
+    { title: "Chain Storm",   weaponName: "Chain Lightning",  signature: "chainLightning", friendly: [],                         hint: "A lightning arc jumps through clustered enemies." },
+    { title: "Orbit Guard",   weaponName: "Orbit Blades",     signature: "orbitBlades",    friendly: [],                         hint: "Orbiting blades punish enemies that curve close." },
+    { title: "Wave Cutter",   weaponName: "Wave Cutter",      signature: "waveCutter",     friendly: [],                         hint: "A horizontal slash cuts across side streams and wave walls." },
+    { title: "Shield Harbor", weaponName: "Shield Breaker",   signature: "shieldBreaker",  friendly: ["clearLane","sideSweep"], hint: "Shield Breaker cracks shield enemies fast." },
+    { title: "Gravity Garden",weaponName: "Gravity Well",     signature: "gravityWell",    friendly: ["slowField","sideSweep"], hint: "Gravity Well pulls clustered swarms inward." }
   ];
 
   function resize() {
@@ -161,6 +188,10 @@
   }
 
   window.addEventListener("resize", resize, { passive: true });
+  window.addEventListener("orientationchange", () => setTimeout(resize, 80), { passive: true });
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", resize, { passive: true });
+  }
   resize();
 
   function rand(a, b) { return a + Math.random() * (b - a); }
@@ -198,6 +229,12 @@
       missiles: [],
       lightning: [],
       cutters: [],
+      breakers: [],
+      wells: [],
+      clearLanes: [],
+      slowFields: [],
+      sideSweeps: [],
+      friendlyTimer: 7.5,
       enemies: [],
       particles: [],
       floaters: [],
@@ -457,7 +494,27 @@
     sweep(780, 1260, t+.42, .25, "sine", .11);
   }
 
+  function levelAdjustedType(type) {
+    const sig = signatureWeapon();
+    if (type === "boss") return type;
+
+    if (sig === "shieldBreaker") {
+      if (type === "basic" && Math.random() < .28) return "shield";
+      if (type === "shard" && Math.random() < .16) return "shield";
+      if (type === "shield" || type === "heavy") return type;
+    }
+
+    if (sig === "gravityWell") {
+      if (type === "shield" && Math.random() < .45) return "basic";
+      if (type === "heavy" && Math.random() < .35) return "shard";
+      if (type === "basic" && Math.random() < .18) return "shard";
+    }
+
+    return type;
+  }
+
   function spawnEnemy(type, x, y, opts = {}) {
+    type = levelAdjustedType(type);
     const base = {
       type,
       x, y,
@@ -662,6 +719,10 @@
 
   function levelDef() {
     return levels[(Math.max(1, state.levelNumber) - 1) % levels.length];
+  }
+
+  function nextLevelDef() {
+    return levels[Math.max(1, state.levelNumber) % levels.length];
   }
 
   function signatureWeapon() {
@@ -1024,6 +1085,8 @@
     if (sig === "chainLightning") return triggerChainLightning(forcePulse ? 8 : 5);
     if (sig === "orbitBlades") return triggerOrbitBlades(forcePulse ? 4.8 : 3.6);
     if (sig === "waveCutter") return triggerWaveCutter(forcePulse ? 2 : 1);
+    if (sig === "shieldBreaker") return triggerShieldBreaker(forcePulse ? 5 : 3);
+    if (sig === "gravityWell") return triggerGravityWell(forcePulse ? 1.15 : 1);
     return false;
   }
 
@@ -1046,6 +1109,93 @@
     state.shake = Math.max(state.shake, 5);
     return true;
   }
+
+  function triggerShieldBreaker(strikes = 3) {
+    if (signatureWeapon() !== "shieldBreaker" || state.signatureCooldown > 0) return false;
+    const targets = state.enemies
+      .filter(e => !e.dead && e.y > -30 && e.y < H*.74)
+      .sort((a,b) => {
+        const av = (a.type === "shield" ? 0 : a.shield ? 1 : a.type === "heavy" ? 2 : a.type === "boss" ? 3 : 5);
+        const bv = (b.type === "shield" ? 0 : b.shield ? 1 : b.type === "heavy" ? 2 : b.type === "boss" ? 3 : 5);
+        return av - bv || dist2(player.x, player.y, a.x, a.y) - dist2(player.x, player.y, b.x, b.y);
+      })
+      .slice(0, Math.max(1, strikes));
+
+    if (!targets.length) return false;
+    state.signatureCooldown = 2.15;
+    sfxChain(Math.max(5, targets.length + 3));
+
+    for (const e of targets) {
+      state.breakers.push({ x1: player.x, y1: player.y - 24, x2: e.x, y2: e.y, life: .38, maxLife: .38, r: e.r + 16 });
+      const dmg = e.type === "boss" ? 7 : e.type === "heavy" ? 8 : e.shield ? 14 : 99;
+      damageEnemy(e, dmg, 10);
+      burst(e.x, e.y, 12, "#aef7ff", .72, .72);
+      state.shockwaves.push({ x: e.x, y: e.y, r: 8, maxR: e.r + 34, life: .28, maxLife: .28, color: "#aef7ff" });
+    }
+    state.shake = Math.max(state.shake, 5);
+    return true;
+  }
+
+  function triggerGravityWell(scale = 1) {
+    if (signatureWeapon() !== "gravityWell" || state.signatureCooldown > 0) return false;
+    const active = state.enemies.filter(e => !e.dead && e.y > 15 && e.y < H*.68);
+    if (!active.length) return false;
+    const center = active
+      .slice()
+      .sort((a,b) => nearbyEnemyCount(b, 104) - nearbyEnemyCount(a, 104))
+      [0];
+
+    state.signatureCooldown = 4.2;
+    sfxBomb();
+    state.wells.push({
+      x: clamp(center.x, 64, W - 64),
+      y: clamp(center.y, H*.18, H*.58),
+      r: 28,
+      maxR: 132 * scale,
+      life: 3.6,
+      maxLife: 3.6,
+      spin: rand(0, Math.PI*2)
+    });
+    burst(center.x, center.y, 42, "#b88cff", .88, 1.0);
+    state.shake = Math.max(state.shake, 5);
+    return true;
+  }
+
+  function triggerClearLane() {
+    const x = clamp(player.x, 64, W - 64);
+    state.clearLanes.push({ x, width: 92, life: 2.6, maxLife: 2.6 });
+    sfxBeam();
+    burst(x, H*.38, 32, "#aef7ff", .55, .8);
+    return true;
+  }
+
+  function triggerSlowField() {
+    const active = state.enemies.filter(e => !e.dead && e.y > 20 && e.y < H*.70);
+    const target = active.length ? active[Math.floor(active.length * .45)] : { x: player.x, y: H*.34 };
+    state.slowFields.push({ x: clamp(target.x, 66, W - 66), y: clamp(target.y, H*.20, H*.58), r: 128, life: 4.8, maxLife: 4.8 });
+    sfxBeam();
+    burst(target.x, target.y, 30, "#73d7ff", .42, .75);
+    return true;
+  }
+
+  function triggerSideSweep() {
+    const dir = Math.random() < .5 ? 1 : -1;
+    state.sideSweeps.push({ dir, life: 2.2, maxLife: 2.2, width: 34 });
+    sfxBeam();
+    return true;
+  }
+
+  function triggerFriendlyEffect() {
+    const choices = levelDef().friendly || [];
+    if (!choices.length) return false;
+    const effect = choices[Math.floor(Math.random() * choices.length)];
+    if (effect === "clearLane") return triggerClearLane();
+    if (effect === "slowField") return triggerSlowField();
+    if (effect === "sideSweep") return triggerSideSweep();
+    return false;
+  }
+
+
 
   function triggerOrbitBlades(duration = 3.8) {
     if (signatureWeapon() !== "orbitBlades" || state.signatureCooldown > 0) return false;
@@ -1225,6 +1375,32 @@
     for (const l of state.lightning) l.life -= dt;
     state.lightning = state.lightning.filter(l => l.life > 0);
 
+    for (const br of state.breakers) br.life -= dt;
+    state.breakers = state.breakers.filter(br => br.life > 0);
+
+    for (const well of state.wells) {
+      well.life -= dt;
+      well.spin += dt * 4.2;
+      const grow = 1 - clamp(well.life / well.maxLife, 0, 1);
+      well.r = lerp(42, well.maxR, grow);
+      const r2 = well.r * well.r;
+      for (const e of state.enemies) {
+        if (e.dead) continue;
+        const dx = well.x - e.x;
+        const dy = well.y - e.y;
+        const d2 = dx*dx + dy*dy;
+        if (d2 < r2) {
+          const d = Math.sqrt(d2) || 1;
+          const pull = (1 - d / well.r) * 190;
+          e.vx += (dx / d) * pull * dt;
+          e.vy += (dy / d) * pull * dt * .55;
+          damageEnemy(e, e.type === "boss" ? .55*dt : e.type === "heavy" ? 1.1*dt : 1.8*dt, 0);
+          if (Math.random() < .06) burst(e.x, e.y, 2, "#b88cff", .35, .38);
+        }
+      }
+    }
+    state.wells = state.wells.filter(w => w.life > 0);
+
     for (const c of state.cutters) {
       c.life -= dt;
       c.y += c.vy * dt;
@@ -1302,6 +1478,59 @@
       if (val < bestVal) { bestVal = val; best = e; }
     }
     return best;
+  }
+
+  function nearbyEnemyCount(center, radius) {
+    const r2 = radius * radius;
+    return state.enemies.filter(e => !e.dead && dist2(center.x, center.y, e.x, e.y) < r2).length;
+  }
+
+
+  function updateFriendlyEffects(dt) {
+    state.friendlyTimer -= dt;
+    if (state.friendlyTimer <= 0 && state.mode === "game" && state.levelTime > 10 && state.levelTime < state.duration - 6) {
+      triggerFriendlyEffect();
+      state.friendlyTimer = rand(11.5, 16.5);
+    }
+
+    for (const lane of state.clearLanes) {
+      lane.life -= dt;
+      for (const e of state.enemies) {
+        if (e.dead) continue;
+        if (e.y > -20 && e.y < H*.82 && Math.abs(e.x - lane.x) < lane.width*.5 + e.r) {
+          damageEnemy(e, e.type === "boss" ? 1.2 : e.type === "heavy" ? 2.2 : 99, 4);
+        }
+      }
+    }
+    state.clearLanes = state.clearLanes.filter(l => l.life > 0);
+
+    for (const field of state.slowFields) {
+      field.life -= dt;
+      const r2 = field.r * field.r;
+      for (const e of state.enemies) {
+        if (e.dead) continue;
+        if (dist2(field.x, field.y, e.x, e.y) < r2) {
+          e.vx *= Math.pow(.10, dt);
+          e.vy *= Math.pow(.30, dt);
+          e.hitFlash = Math.max(e.hitFlash, .04);
+        }
+      }
+    }
+    state.slowFields = state.slowFields.filter(f => f.life > 0);
+
+    for (const sweep of state.sideSweeps) {
+      sweep.life -= dt;
+      const p = 1 - clamp(sweep.life / sweep.maxLife, 0, 1);
+      const x = sweep.dir > 0 ? lerp(-40, W + 40, p) : lerp(W + 40, -40, p);
+      sweep.x = x;
+      for (const e of state.enemies) {
+        if (e.dead) continue;
+        if (e.y > -20 && e.y < H*.76 && Math.abs(e.x - x) < sweep.width + e.r) {
+          damageEnemy(e, e.type === "boss" ? 1.1 : e.type === "heavy" ? 1.8 : 99, 3);
+        }
+      }
+    }
+    state.sideSweeps = state.sideSweeps.filter(s => s.life > 0);
   }
 
   function updateEnemies(dt) {
@@ -1403,6 +1632,7 @@
       updateWaveRhythm(dt);
       updatePlayer(dt);
       updateWeapons(dt);
+      updateFriendlyEffects(dt);
       updateEnemies(dt);
       updateParticles(dt);
       state.announceTimer = Math.max(0, state.announceTimer - dt);
@@ -1490,26 +1720,30 @@
   function drawLevelAnnouncement() {
     if (state.announceTimer <= 0) return;
     const a = clamp(state.announceTimer / 4.0, 0, 1);
+    const def = levelDef();
     ctx.save();
     ctx.globalAlpha = Math.min(1, a * 1.35);
     ctx.fillStyle = "rgba(5,8,18,.58)";
-    roundRect(28, 104, W-56, 168, 22, true, false);
+    roundRect(28, 98, W-56, 198, 22, true, false);
     ctx.textAlign = "center";
     ctx.fillStyle = "#ffffff";
     ctx.font = "900 28px system-ui, sans-serif";
     ctx.shadowColor = "rgba(255,239,131,.75)";
     ctx.shadowBlur = 14;
-    ctx.fillText("Level " + state.levelNumber, W/2, 142);
+    ctx.fillText("Level " + state.levelNumber, W/2, 136);
     ctx.shadowBlur = 0;
     ctx.font = "900 22px system-ui, sans-serif";
     ctx.fillStyle = "#ffef83";
-    ctx.fillText(signatureWeaponName(), W/2, 182);
+    ctx.fillText(def.weaponName, W/2, 176);
     ctx.font = "700 16px system-ui, sans-serif";
     ctx.fillStyle = "rgba(223,249,255,.92)";
-    ctx.fillText("Single Shot + Triple Shot", W/2, 216);
+    ctx.fillText("Single Shot + Triple Shot", W/2, 210);
+    ctx.font = "800 13px system-ui, sans-serif";
+    ctx.fillStyle = "rgba(255,239,131,.86)";
+    ctx.fillText(def.hint, W/2, 238);
     ctx.font = "700 13px system-ui, sans-serif";
     ctx.fillStyle = "rgba(223,249,255,.76)";
-    ctx.fillText(levelDef().title, W/2, 242);
+    ctx.fillText(def.title, W/2, 264);
     ctx.restore();
   }
 
@@ -1532,6 +1766,7 @@
       ctx.fill();
     }
 
+    drawFriendlyEffects();
     drawEnemies();
     drawWeapons();
     drawPlayer();
@@ -1585,6 +1820,59 @@
       ctx.fillText("CHAIN x" + state.chain, 20, 86);
       ctx.shadowBlur = 0;
     }
+    ctx.restore();
+  }
+
+  function drawFriendlyEffects() {
+    ctx.save();
+
+    for (const lane of state.clearLanes) {
+      const a = clamp(lane.life / lane.maxLife, 0, 1);
+      const grad = ctx.createLinearGradient(lane.x - lane.width/2, 0, lane.x + lane.width/2, 0);
+      grad.addColorStop(0, "rgba(174,247,255,0)");
+      grad.addColorStop(.5, `rgba(174,247,255,${.26 + .30*a})`);
+      grad.addColorStop(1, "rgba(174,247,255,0)");
+      ctx.fillStyle = grad;
+      ctx.globalCompositeOperation = "lighter";
+      ctx.fillRect(lane.x - lane.width/2, 72, lane.width, H - 120);
+      ctx.strokeStyle = `rgba(255,255,255,${.20 + .30*a})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(lane.x, 72);
+      ctx.lineTo(lane.x, H - 48);
+      ctx.stroke();
+    }
+
+    for (const field of state.slowFields) {
+      const a = clamp(field.life / field.maxLife, 0, 1);
+      const rg = ctx.createRadialGradient(field.x, field.y, 8, field.x, field.y, field.r);
+      rg.addColorStop(0, `rgba(115,215,255,${.24*a})`);
+      rg.addColorStop(.65, `rgba(115,215,255,${.12*a})`);
+      rg.addColorStop(1, "rgba(115,215,255,0)");
+      ctx.fillStyle = rg;
+      ctx.beginPath();
+      ctx.arc(field.x, field.y, field.r, 0, Math.PI*2);
+      ctx.fill();
+      ctx.strokeStyle = `rgba(174,247,255,${.28*a})`;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(field.x, field.y, field.r*.74, 0, Math.PI*2);
+      ctx.stroke();
+    }
+
+    for (const sweep of state.sideSweeps) {
+      const a = clamp(sweep.life / sweep.maxLife, 0, 1);
+      const x = sweep.x ?? (sweep.dir > 0 ? -40 : W+40);
+      const grad = ctx.createLinearGradient(x - sweep.width, 0, x + sweep.width, 0);
+      grad.addColorStop(0, "rgba(255,239,131,0)");
+      grad.addColorStop(.5, `rgba(255,239,131,${.34 + .46*a})`);
+      grad.addColorStop(1, "rgba(255,239,131,0)");
+      ctx.fillStyle = grad;
+      ctx.globalCompositeOperation = "lighter";
+      ctx.fillRect(x - sweep.width, 58, sweep.width*2, H*.74);
+    }
+
+    ctx.globalCompositeOperation = "source-over";
     ctx.restore();
   }
 
@@ -1693,6 +1981,49 @@
       ctx.stroke();
     }
     ctx.globalAlpha = 1;
+
+    for (const br of state.breakers) {
+      const a = clamp(br.life / br.maxLife, 0, 1);
+      ctx.globalAlpha = .35 + .55*a;
+      ctx.strokeStyle = "#aef7ff";
+      ctx.lineWidth = 9*a + 2;
+      ctx.beginPath();
+      ctx.moveTo(br.x1, br.y1);
+      ctx.lineTo(br.x2, br.y2);
+      ctx.stroke();
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(br.x2, br.y2, br.r*(1-a*.35), 0, Math.PI*2);
+      ctx.strokeStyle = `rgba(174,247,255,${.70*a})`;
+      ctx.lineWidth = 4;
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+
+    for (const well of state.wells) {
+      const a = clamp(well.life / well.maxLife, 0, 1);
+      ctx.save();
+      ctx.translate(well.x, well.y);
+      ctx.rotate(well.spin);
+      const rg = ctx.createRadialGradient(0, 0, 6, 0, 0, well.r);
+      rg.addColorStop(0, `rgba(255,255,255,${.18*a})`);
+      rg.addColorStop(.35, `rgba(184,140,255,${.34*a})`);
+      rg.addColorStop(1, "rgba(184,140,255,0)");
+      ctx.fillStyle = rg;
+      ctx.beginPath();
+      ctx.arc(0, 0, well.r, 0, Math.PI*2);
+      ctx.fill();
+      ctx.strokeStyle = `rgba(255,239,131,${.48*a})`;
+      ctx.lineWidth = 3;
+      for (let i=0; i<3; i++) {
+        ctx.beginPath();
+        ctx.ellipse(0, 0, well.r*.62, well.r*(.20 + i*.09), i*.72, 0, Math.PI*2);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
 
     for (const c of state.cutters) {
       const a = clamp(c.life / c.maxLife, 0, 1);
@@ -1874,23 +2205,28 @@
     ctx.fillStyle = "#ffffff";
     ctx.shadowColor = "rgba(255,239,131,.8)";
     ctx.shadowBlur = 20;
-    ctx.fillText("Level Clear", W/2, H*.31);
+    ctx.fillText("Level Clear", W/2, H*.29);
     ctx.shadowBlur = 0;
 
     ctx.font = "800 22px system-ui, sans-serif";
     ctx.fillStyle = "#dff9ff";
-    ctx.fillText("Level " + state.levelNumber + " · " + signatureWeaponName(), W/2, H*.40);
+    ctx.fillText("Level " + state.levelNumber + " · " + signatureWeaponName(), W/2, H*.38);
 
     ctx.font = "700 18px system-ui, sans-serif";
     ctx.fillStyle = "rgba(247,251,255,.88)";
-    ctx.fillText(`Destroyed: ${state.destroyed}`, W/2, H*.49);
-    ctx.fillText(`Level Score: ${Math.round(state.score)}`, W/2, H*.54);
-    ctx.fillText(`Total Score: ${Math.round(state.totalScore)}`, W/2, H*.59);
-    ctx.fillText(`Best Chain: x${Math.max(1, state.maxChain)}`, W/2, H*.64);
+    ctx.fillText(`Destroyed: ${state.destroyed}`, W/2, H*.47);
+    ctx.fillText(`Level Score: ${Math.round(state.score)}`, W/2, H*.52);
+    ctx.fillText(`Total Score: ${Math.round(state.totalScore)}`, W/2, H*.57);
+    ctx.fillText(`Best Chain: x${Math.max(1, state.maxChain)}`, W/2, H*.62);
+
+    const next = nextLevelDef();
+    ctx.font = "800 18px system-ui, sans-serif";
+    ctx.fillStyle = "#dff9ff";
+    ctx.fillText("Next: " + next.weaponName, W/2, H*.70);
 
     ctx.font = "800 24px system-ui, sans-serif";
     ctx.fillStyle = "#ffef83";
-    ctx.fillText("Touch screen for next level", W/2, H*.77);
+    ctx.fillText("Touch screen for next level", W/2, H*.79);
     ctx.restore();
   }
 
