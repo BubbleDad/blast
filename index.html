@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
-<title>Meowmoon Battle Prototype 15 Full iPad Fill</title>
+<title>Meowmoon Battle Prototype 16 Maintenance Clean</title>
 <style>
   :root {
     --bg: #050812;
@@ -68,7 +68,7 @@
 (() => {
   "use strict";
 
-  // Prototype 15 full iPad fill: built from v14; fills the entire available iPad viewport instead of preserving the portrait game ratio, while preserving v14 level identity additions.
+  // Prototype 16 maintenance clean: keeps full iPad canvas with unstretched portrait playfield, and preserves v14 level identity, v12 weapon timing, and v10 level-end fix. No gameplay changes in maintenance.
 
   const canvas = document.getElementById("game");
   const ctx = canvas.getContext("2d", { alpha: false });
@@ -76,7 +76,9 @@
   const W = 430;
   const H = 760;
   let dpr = 1;
-  let scaleX = 1, scaleY = 1;
+  let renderScale = 1;
+  let renderOffsetX = 0;
+  let renderOffsetY = 0;
   let last = performance.now();
 
   const state = {
@@ -171,11 +173,15 @@
   function resize() {
     const rect = canvas.getBoundingClientRect();
     dpr = Math.max(1, Math.min(2.5, window.devicePixelRatio || 1));
-    canvas.width = Math.round(rect.width * dpr);
-    canvas.height = Math.round(rect.height * dpr);
-    ctx.setTransform(canvas.width / W, 0, 0, canvas.height / H, 0, 0);
-    scaleX = W / rect.width;
-    scaleY = H / rect.height;
+    canvas.width = Math.max(1, Math.round(rect.width * dpr));
+    canvas.height = Math.max(1, Math.round(rect.height * dpr));
+
+    // Full-screen canvas, unstretched playfield:
+    // use one uniform scale, then center the original 430 × 760 game field.
+    renderScale = Math.min(canvas.width / W, canvas.height / H);
+    renderOffsetX = (canvas.width - W * renderScale) / 2;
+    renderOffsetY = (canvas.height - H * renderScale) / 2;
+    ctx.setTransform(renderScale, 0, 0, renderScale, renderOffsetX, renderOffsetY);
   }
 
   window.addEventListener("resize", resize, { passive: true });
@@ -243,9 +249,11 @@
 
   function pointerPos(e) {
     const rect = canvas.getBoundingClientRect();
+    const px = (e.clientX - rect.left) * dpr;
+    const py = (e.clientY - rect.top) * dpr;
     return {
-      x: (e.clientX - rect.left) * scaleX,
-      y: (e.clientY - rect.top) * scaleY
+      x: (px - renderOffsetX) / renderScale,
+      y: (py - renderOffsetY) / renderScale
     };
   }
 
@@ -1638,6 +1646,27 @@
     }
   }
 
+  function prepareFrame() {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = "#050812";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const margin = Math.max(renderOffsetX, renderOffsetY);
+    if (margin > 2) {
+      const grd = ctx.createRadialGradient(
+        canvas.width * .5, canvas.height * .42, 10,
+        canvas.width * .5, canvas.height * .42, Math.max(canvas.width, canvas.height) * .72
+      );
+      grd.addColorStop(0, "rgba(33,49,96,.34)");
+      grd.addColorStop(.55, "rgba(9,18,44,.42)");
+      grd.addColorStop(1, "rgba(5,8,18,1)");
+      ctx.fillStyle = grd;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    ctx.setTransform(renderScale, 0, 0, renderScale, renderOffsetX, renderOffsetY);
+  }
+
   function drawBackground() {
     const g = ctx.createLinearGradient(0,0,0,H);
     g.addColorStop(0, "#060817");
@@ -2222,6 +2251,7 @@
   }
 
   function render() {
+    prepareFrame();
     if (state.mode === "title") drawTitle();
     else if (state.mode === "game") drawGame();
     else drawVictory();
