@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
-<title>Meowmoon Battle Prototype 14 Level Identity</title>
+<title>Meowmoon Battle Prototype 15 Full iPad Fill</title>
 <style>
   :root {
     --bg: #050812;
@@ -23,30 +23,25 @@
   }
   body {
     display: flex;
-    align-items: center;
-    justify-content: center;
-    padding:
-      env(safe-area-inset-top)
-      env(safe-area-inset-right)
-      env(safe-area-inset-bottom)
-      env(safe-area-inset-left);
+    align-items: stretch;
+    justify-content: stretch;
+    padding: 0;
     box-sizing: border-box;
   }
   #wrap {
     position: relative;
-    width: min(100vw, calc(100dvh * 0.5657894737));
-    height: min(100dvh, calc(100vw * 1.7674418605));
+    width: 100vw;
+    height: 100dvh;
     max-width: none;
     max-height: none;
     background: #050812;
     overflow: hidden;
-    border-radius: clamp(0px, 1.6vw, 16px);
-    box-shadow: 0 22px 80px rgba(0,0,0,.65);
+    border-radius: 0;
+    box-shadow: none;
   }
   @supports (height: 100svh) {
     #wrap {
-      width: min(100vw, calc(100svh * 0.5657894737));
-      height: min(100svh, calc(100vw * 1.7674418605));
+      height: 100svh;
     }
   }
   canvas {
@@ -57,13 +52,9 @@
     touch-action: none;
   }
   @media (max-width: 640px) {
-    body { padding: 0; }
     #wrap {
       width: 100vw;
       height: 100dvh;
-      border-radius: 0;
-      max-width: none;
-      max-height: none;
     }
   }
 </style>
@@ -77,7 +68,7 @@
 (() => {
   "use strict";
 
-  // Prototype 14 level identity: built from v13 maintenance clean; adds Shield Breaker, Gravity Well, Clear Lane, Slow Field, Side Beam Sweep, levels 7 and 8, next-level preview, and level-specific enemy mix.
+  // Prototype 15 full iPad fill: built from v14; fills the entire available iPad viewport instead of preserving the portrait game ratio, while preserving v14 level identity additions.
 
   const canvas = document.getElementById("game");
   const ctx = canvas.getContext("2d", { alpha: false });
